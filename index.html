@@ -388,6 +388,8 @@ function setupListeners() {
     if (s) {
       if (s.employees) state.employees = s.employees;
       if (s.vehicles) state.vehicles = s.vehicles;
+      if (s.inactiveEmployees) state.inactiveEmployees = s.inactiveEmployees;
+      else state.inactiveEmployees = [];
     }
     render();
   });
