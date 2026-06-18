@@ -339,7 +339,8 @@ let state = {
   plans: {},
   settings: {},
   myId: 'user_' + Math.random().toString(36).slice(2,8),
-  myName: ''
+  myName: '',
+  empFilter: null
 };
 
 // ===== PRESENCE =====
@@ -513,7 +514,8 @@ function renderSidebar(){
     const gs=plan.globalStatus?.[emp];
     const sc=gs==='absent'?'var(--red)':gs==='school'?'var(--blue)':gs==='half'?'var(--yellow)':'var(--green)';
     const init=emp.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-    return `<div class="emp-item"><div class="emp-avatar" style="background:${COLORS[i%COLORS.length]}33;color:${COLORS[i%COLORS.length]}">${init}</div><div class="emp-name">${emp}</div><div class="emp-status" style="background:${sc}"></div></div>`;
+    const active=state.empFilter===emp;
+    return `<div class="emp-item" style="cursor:pointer;border-radius:6px;background:${active?'var(--accent)22':''}" onclick="toggleEmpFilter('${emp.replace(/'/g,"\\'")}')"><div class="emp-avatar" style="background:${COLORS[i%COLORS.length]}33;color:${COLORS[i%COLORS.length]}">${init}</div><div class="emp-name" style="color:${active?'var(--accent)':''};font-weight:${active?700:400}">${emp}</div><div class="emp-status" style="background:${sc}"></div></div>`;
   }).join('');
 }
 
@@ -543,7 +545,8 @@ function renderPlanView(){
   const d=state.selectedDate,plan=getDayPlan(d);
   const days=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
   const months=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
-  const activeEmployees=state.employees.filter(e=>!(state.inactiveEmployees||[]).includes(e));
+  const allActive=state.employees.filter(e=>!(state.inactiveEmployees||[]).includes(e));
+  const activeEmployees=state.empFilter?allActive.filter(e=>e===state.empFilter):allActive;
   let empHeaders=activeEmployees.map((emp,i)=>{
     const gs=plan.globalStatus?.[emp]||'';
     const sc=gs==='absent'?'var(--red)':gs==='school'?'var(--blue)':gs==='half'?'var(--yellow)':'var(--green)';
@@ -586,6 +589,8 @@ function renderPlanView(){
       <button class="add-row-btn" onclick="addSite()">+ Baustelle hinzufügen</button>
     </div>`;
 }
+
+function toggleEmpFilter(emp){state.empFilter=state.empFilter===emp?null:emp;renderSidebar();renderPlanView();}
 
 function goToday(){state.selectedDate=new Date();state.currentDate=new Date();render();showToast('Heute','success');}
 function changeDay(dir){const d=new Date(state.selectedDate);d.setDate(d.getDate()+dir);state.selectedDate=d;state.currentDate=new Date(d.getFullYear(),d.getMonth(),1);render();}
@@ -637,6 +642,7 @@ function deleteSite(siteId){
   plan.sites=plan.sites.filter(s=>s.id!==siteId);
   fbWrite('plans/'+dateKey(state.selectedDate),plan);
   closeModal();
+  renderPlanView();
 }
 
 function pickVehicle(siteId){
@@ -810,7 +816,7 @@ function showModal({title,content,actions}){
   const btns=actions.map(a=>`<button class="${a.cancel?'btn-cancel':'btn-confirm'}${a.danger?' btn-danger':''}" id="mBtn${a.label.replace(/\s/g,'')}">${a.label}</button>`).join('');
   box.innerHTML=`<div class="modal-title">${title}</div>${content}<div class="modal-actions">${btns}</div>`;
   document.getElementById('modalOverlay').style.display='flex';
-  actions.forEach(a=>{if(!a.cancel){const btn=document.getElementById('mBtn'+a.label.replace(/\s/g,''));if(btn&&a.action)btn.onclick=a.action;}});
+  actions.forEach(a=>{const btn=document.getElementById('mBtn'+a.label.replace(/\s/g,''));if(btn){if(a.cancel)btn.onclick=closeModal;else if(a.action)btn.onclick=a.action;}});
 }
 function closeModal(){document.getElementById('modalOverlay').style.display='none';}
 function closeCtx(){document.getElementById('ctxMenu').style.display='none';}
