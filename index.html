@@ -838,7 +838,7 @@ function deactivateEmp(i){
 function reactivateEmp(i){
   const emp=state.employees[i];
   state.inactiveEmployees=(state.inactiveEmployees||[]).filter(e=>e!==emp);
-  if(state.employeeDates&&state.employeeDates[emp])state.employeeDates[emp].austritt=undefined;
+  if(state.employeeDates&&state.employeeDates[emp])delete state.employeeDates[emp].austritt;
   saveSettings();showToast(emp+' reaktiviert','success');renderSettingsView();
 }
 function openDatesModal(i){
@@ -854,7 +854,10 @@ function openDatesModal(i){
       const ein=document.getElementById('dEin').value;
       const aus=document.getElementById('dAus').value;
       if(!state.employeeDates)state.employeeDates={};
-      state.employeeDates[emp]={eintritt:ein||undefined,austritt:aus||undefined};
+      const rec={};
+      if(ein)rec.eintritt=ein;
+      if(aus)rec.austritt=aus;
+      state.employeeDates[emp]=rec;
       saveSettings();closeModal();renderSettingsView();
       showToast(aus&&aus<=dateKey(new Date())?emp+' archiviert':'Daten gespeichert','success');
     }}]});
