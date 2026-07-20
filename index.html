@@ -337,6 +337,7 @@ let state = {
   inactiveEmployees: [],
   employeeDates: {},
   showArchived: false,
+  showUpcoming: false,
   vehicles: ['Tiguan','Kangoo 2','Nissan 3','Kangoo 4','VW Bus 5','VW Caddy 6','Jumpy 7','Transit 8','Berlingo 9','Traffic 10','Transit 11'],
   plans: {},
   settings: {},
@@ -349,7 +350,11 @@ let state = {
 function dateKey(d){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day;}
 function getDayPlan(d){const k=dateKey(d);if(!state.plans[k])state.plans[k]={sites:[],globalStatus:{}};return state.plans[k];}
 function empDates(emp){return (state.employeeDates||{})[emp]||{};}
-function isArchivedEmp(emp){const a=empDates(emp).austritt;return !!a&&a<=dateKey(new Date());}
+function isArchivedAsOf(emp,refKey){const a=empDates(emp).austritt;return !!a&&a<=refKey;}
+function isNotYetStartedAsOf(emp,refKey){const e=empDates(emp).eintritt;return !!e&&e>refKey;}
+function isArchivedEmp(emp){return isArchivedAsOf(emp,dateKey(new Date()));}
+function isNotYetStarted(emp){return isNotYetStartedAsOf(emp,dateKey(new Date()));}
+function isHiddenEmp(emp){return isArchivedEmp(emp)||isNotYetStarted(emp);}
 function fmtDate(k){if(!k)return'';const[y,m,d]=k.split('-');return d+'.'+m+'.'+y;}
 
 function setupPresence(name) {
@@ -516,7 +521,7 @@ function renderSidebar(){
   const plan=getDayPlan(state.selectedDate);
   const allEmps=state.employees;
   el.innerHTML=allEmps.map((emp,i)=>{
-    const isInactive=(state.inactiveEmployees||[]).includes(emp)||isArchivedEmp(emp);
+    const isInactive=(state.inactiveEmployees||[]).includes(emp)||isHiddenEmp(emp);
     if(isInactive)return '';
     const gs=plan.globalStatus?.[emp];
     const sc=gs==='absent'?'var(--red)':gs==='school'?'var(--blue)':gs==='half'?'var(--yellow)':'var(--green)';
@@ -552,7 +557,8 @@ function renderPlanView(){
   const d=state.selectedDate,plan=getDayPlan(d);
   const days=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
   const months=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
-  const allActive=state.employees.filter(e=>!(state.inactiveEmployees||[]).includes(e)&&!isArchivedEmp(e));
+  const refKey=dateKey(d);
+  const allActive=state.employees.filter(e=>!(state.inactiveEmployees||[]).includes(e)&&!isArchivedAsOf(e,refKey)&&!isNotYetStartedAsOf(e,refKey));
   const dayNames=new Set();
   Object.keys(plan.globalStatus||{}).forEach(n=>dayNames.add(n));
   (plan.sites||[]).forEach(site=>Object.keys(site.assignments||{}).forEach(n=>dayNames.add(n)));
@@ -739,7 +745,7 @@ function renderEmployeeView(){
 }
 function filterEmpView(){renderEmpCards(document.getElementById('empSearch')?.value||'');}
 function renderEmpCards(filter){
-  const visible=state.employees.filter(e=>!isArchivedEmp(e));
+  const visible=state.employees.filter(e=>!isHiddenEmp(e));
   const emps=filter?visible.filter(e=>e.toLowerCase().includes(filter.toLowerCase())):visible;
   const now=new Date(),days=['So','Mo','Di','Mi','Do','Fr','Sa'],months=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
   const el=document.getElementById('empCards');if(!el)return;
@@ -770,8 +776,9 @@ function renderEmpCards(filter){
 // ===== SETTINGS =====
 let dragSrcIdx=null,dragType=null;
 function renderSettingsView(){
-  const visibleIdx=state.employees.map((e,i)=>i).filter(i=>!isArchivedEmp(state.employees[i]));
+  const visibleIdx=state.employees.map((e,i)=>i).filter(i=>!isHiddenEmp(state.employees[i]));
   const archivedIdx=state.employees.map((e,i)=>i).filter(i=>isArchivedEmp(state.employees[i]));
+  const upcomingIdx=state.employees.map((e,i)=>i).filter(i=>isNotYetStarted(state.employees[i]));
   const empRows=visibleIdx.map(i=>{
     const e=state.employees[i];
     const col=COLORS[i%COLORS.length];const init=e.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
@@ -799,6 +806,20 @@ function renderSettingsView(){
     <div class="settings-section-title" style="cursor:pointer;display:flex;align-items:center;gap:6px" onclick="toggleArchived()">${state.showArchived?'▾':'▸'} Archiviert (${archivedIdx.length}) <span style="font-size:11px;font-weight:400;color:var(--text3)">– zählt nicht mehr zu den Mitarbeitern, vergangene Einsätze bleiben sichtbar</span></div>
     ${state.showArchived?archivedRows:''}
   </div>`:'';
+  const upcomingRows=upcomingIdx.map(i=>{
+    const e=state.employees[i];
+    const col=COLORS[i%COLORS.length];const init=e.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+    const d=empDates(e);
+    return `<div class="settings-row">
+      <div style="width:26px;height:26px;border-radius:50%;background:${col}33;color:${col};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">${init}</div>
+      <div class="settings-row-name">${e}<div style="font-size:10px;color:var(--text3);margin-top:2px">Eintritt ab ${fmtDate(d.eintritt)}</div></div>
+      <div class="settings-row-actions"><button class="btn-sm" onclick="renameEmp(${i})">Umbenennen</button><button class="btn-sm" onclick="openDatesModal(${i})">Ein-/Austritt</button></div>
+    </div>`;
+  }).join('');
+  const upcomingSection=upcomingIdx.length?`<div class="settings-section" style="margin-top:16px">
+    <div class="settings-section-title" style="cursor:pointer;display:flex;align-items:center;gap:6px" onclick="toggleUpcoming()">${state.showUpcoming?'▾':'▸'} Bevorstehend (${upcomingIdx.length}) <span style="font-size:11px;font-weight:400;color:var(--text3)">– zählt erst ab Eintrittsdatum mit, erscheint dann automatisch</span></div>
+    ${state.showUpcoming?upcomingRows:''}
+  </div>`:'';
   const vehRows=state.vehicles.map((v,i)=>`<div class="settings-row" draggable="true" ondragstart="dragStart(event,'veh',${i})" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropItem(event,'veh',${i})">
     <span class="drag-handle">⠿</span><span class="settings-tag">${i+1}</span>
     <div class="settings-row-name">${v}</div>
@@ -807,6 +828,7 @@ function renderSettingsView(){
   document.getElementById('mainContent').innerHTML=`<div class="settings-wrap">
     <h2 style="font-size:16px;font-weight:700;margin-bottom:20px">Einstellungen</h2>
     <div class="settings-section"><div class="settings-section-title">Mitarbeiter (${visibleIdx.length}) <span style="font-size:11px;font-weight:400;color:var(--text3)">– Drag & Drop zum Sortieren</span></div>${empRows}<button class="btn-add" onclick="addEmp()">+ Mitarbeiter hinzufügen</button></div>
+    ${upcomingSection}
     ${archivedSection}
     <div class="settings-section"><div class="settings-section-title">Fahrzeuge (${state.vehicles.length})</div>${vehRows}<button class="btn-add" onclick="addVeh()">+ Fahrzeug hinzufügen</button></div>
   </div>`;
@@ -814,6 +836,7 @@ function renderSettingsView(){
 
 function saveSettings(){fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[],employeeDates:state.employeeDates||{}},100);}
 function toggleArchived(){state.showArchived=!state.showArchived;renderSettingsView();}
+function toggleUpcoming(){state.showUpcoming=!state.showUpcoming;renderSettingsView();}
 function dragStart(e,type,idx){dragSrcIdx=idx;dragType=type;e.currentTarget.classList.add('dragging');e.dataTransfer.effectAllowed='move';}
 function dragOver(e){e.preventDefault();e.currentTarget.classList.add('drag-over');}
 function dragLeave(e){e.currentTarget.classList.remove('drag-over');}
@@ -849,7 +872,7 @@ function openDatesModal(i){
     <input type="date" class="modal-input" id="dEin" value="${d.eintritt||''}">
     <label style="font-size:12px;color:var(--text2);display:block;margin:12px 0 4px">Austrittsdatum</label>
     <input type="date" class="modal-input" id="dAus" value="${d.austritt||''}">
-    <p style="font-size:11px;color:var(--text3);margin-top:10px">Wird ein Austrittsdatum gesetzt, das erreicht ist, wird der Mitarbeiter automatisch archiviert (zählt nicht mehr mit, vergangene Einsätze bleiben sichtbar).</p>`,
+    <p style="font-size:11px;color:var(--text3);margin-top:10px">Liegt das Eintrittsdatum in der Zukunft, erscheint der Mitarbeiter erst ab diesem Tag automatisch. Ist das Austrittsdatum erreicht, wird er automatisch archiviert (zählt nicht mehr mit, vergangene Einsätze bleiben sichtbar).</p>`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{
       const ein=document.getElementById('dEin').value;
       const aus=document.getElementById('dAus').value;
@@ -859,7 +882,9 @@ function openDatesModal(i){
       if(aus)rec.austritt=aus;
       state.employeeDates[emp]=rec;
       saveSettings();closeModal();renderSettingsView();
-      showToast(aus&&aus<=dateKey(new Date())?emp+' archiviert':'Daten gespeichert','success');
+      const today=dateKey(new Date());
+      const msg=aus&&aus<=today?emp+' archiviert':ein&&ein>today?emp+' als bevorstehend erfasst':'Daten gespeichert';
+      showToast(msg,'success');
     }}]});
 }
 function addEmp(){showModal({title:'Mitarbeiter hinzufügen',content:`<input class="modal-input" id="nn" placeholder="Name">`,actions:[{label:'Abbrechen',cancel:true},{label:'Hinzufügen',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){state.employees.push(v);if(!state.employeeDates)state.employeeDates={};state.employeeDates[v]={eintritt:dateKey(new Date())};saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
