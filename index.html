@@ -335,6 +335,8 @@ let state = {
   selectedDate: new Date(),
   employees: ['Timo','Christoph','Stéphane','Reto B','Lukas','Reto M','Oliver','Michael','Ismael','Luis','Hugo','Roman','Ricardo','Hristijan','Schnuppi','Flavio','Jérome','Temp','Alexander','Marvin'],
   inactiveEmployees: [],
+  employeeDates: {},
+  showArchived: false,
   vehicles: ['Tiguan','Kangoo 2','Nissan 3','Kangoo 4','VW Bus 5','VW Caddy 6','Jumpy 7','Transit 8','Berlingo 9','Traffic 10','Transit 11'],
   plans: {},
   settings: {},
@@ -346,6 +348,9 @@ let state = {
 // ===== PRESENCE =====
 function dateKey(d){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day;}
 function getDayPlan(d){const k=dateKey(d);if(!state.plans[k])state.plans[k]={sites:[],globalStatus:{}};return state.plans[k];}
+function empDates(emp){return (state.employeeDates||{})[emp]||{};}
+function isArchivedEmp(emp){const a=empDates(emp).austritt;return !!a&&a<=dateKey(new Date());}
+function fmtDate(k){if(!k)return'';const[y,m,d]=k.split('-');return d+'.'+m+'.'+y;}
 
 function setupPresence(name) {
   const presRef = db.ref('presence/' + state.myId);
@@ -416,6 +421,8 @@ function setupListeners() {
       if (s.vehicles) state.vehicles = s.vehicles;
       if (s.inactiveEmployees) state.inactiveEmployees = s.inactiveEmployees;
       else state.inactiveEmployees = [];
+      if (s.employeeDates) state.employeeDates = s.employeeDates;
+      else state.employeeDates = {};
     }
     render();
   });
@@ -509,7 +516,7 @@ function renderSidebar(){
   const plan=getDayPlan(state.selectedDate);
   const allEmps=state.employees;
   el.innerHTML=allEmps.map((emp,i)=>{
-    const isInactive=(state.inactiveEmployees||[]).includes(emp);
+    const isInactive=(state.inactiveEmployees||[]).includes(emp)||isArchivedEmp(emp);
     if(isInactive)return '';
     const gs=plan.globalStatus?.[emp];
     const sc=gs==='absent'?'var(--red)':gs==='school'?'var(--blue)':gs==='half'?'var(--yellow)':'var(--green)';
@@ -545,12 +552,18 @@ function renderPlanView(){
   const d=state.selectedDate,plan=getDayPlan(d);
   const days=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
   const months=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
-  const allActive=state.employees.filter(e=>!(state.inactiveEmployees||[]).includes(e));
-  const activeEmployees=state.empFilter?allActive.filter(e=>e===state.empFilter):allActive;
+  const allActive=state.employees.filter(e=>!(state.inactiveEmployees||[]).includes(e)&&!isArchivedEmp(e));
+  const dayNames=new Set();
+  Object.keys(plan.globalStatus||{}).forEach(n=>dayNames.add(n));
+  (plan.sites||[]).forEach(site=>Object.keys(site.assignments||{}).forEach(n=>dayNames.add(n)));
+  const historical=[...dayNames].filter(n=>!allActive.includes(n));
+  const allColumns=allActive.concat(historical);
+  const activeEmployees=state.empFilter?allColumns.filter(e=>e===state.empFilter):allColumns;
   let empHeaders=activeEmployees.map((emp,i)=>{
     const gs=plan.globalStatus?.[emp]||'';
     const sc=gs==='absent'?'var(--red)':gs==='school'?'var(--blue)':gs==='half'?'var(--yellow)':'var(--green)';
-    return `<th style="cursor:pointer" onclick="openStatusModal('${emp.replace(/'/g,"\\'")}')"><div class="col-header-wrap"><div class="col-header-name" title="${emp}">${emp}</div><div style="width:8px;height:8px;border-radius:50%;background:${sc};margin:0 auto"></div></div></th>`;
+    const isHist=historical.includes(emp);
+    return `<th style="cursor:pointer${isHist?';opacity:.55':''}" onclick="openStatusModal('${emp.replace(/'/g,"\\'")}')"><div class="col-header-wrap"><div class="col-header-name" title="${emp}${isHist?' (nicht mehr aktiv)':''}">${emp}</div><div style="width:8px;height:8px;border-radius:50%;background:${sc};margin:0 auto"></div></div></th>`;
   }).join('');
   let rows=(plan.sites||[]).map(site=>{
     const vIdx=site.vehicle?site.vehicle-1:-1;
@@ -726,7 +739,8 @@ function renderEmployeeView(){
 }
 function filterEmpView(){renderEmpCards(document.getElementById('empSearch')?.value||'');}
 function renderEmpCards(filter){
-  const emps=filter?state.employees.filter(e=>e.toLowerCase().includes(filter.toLowerCase())):state.employees;
+  const visible=state.employees.filter(e=>!isArchivedEmp(e));
+  const emps=filter?visible.filter(e=>e.toLowerCase().includes(filter.toLowerCase())):visible;
   const now=new Date(),days=['So','Mo','Di','Mi','Do','Fr','Sa'],months=['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
   const el=document.getElementById('empCards');if(!el)return;
   el.innerHTML=emps.map(emp=>{
@@ -756,15 +770,35 @@ function renderEmpCards(filter){
 // ===== SETTINGS =====
 let dragSrcIdx=null,dragType=null;
 function renderSettingsView(){
-  const empRows=state.employees.map((e,i)=>{
+  const visibleIdx=state.employees.map((e,i)=>i).filter(i=>!isArchivedEmp(state.employees[i]));
+  const archivedIdx=state.employees.map((e,i)=>i).filter(i=>isArchivedEmp(state.employees[i]));
+  const empRows=visibleIdx.map(i=>{
+    const e=state.employees[i];
     const col=COLORS[i%COLORS.length];const init=e.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+    const isInactive=(state.inactiveEmployees||[]).includes(e);
+    const d=empDates(e);
+    const dateInfo=[d.eintritt?`Eintritt ${fmtDate(d.eintritt)}`:'',d.austritt?`Austritt geplant: ${fmtDate(d.austritt)}`:''].filter(Boolean).join(' · ');
     return `<div class="settings-row" draggable="true" data-idx="${i}" ondragstart="dragStart(event,'emp',${i})" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropItem(event,'emp',${i})">
       <span class="drag-handle">⠿</span>
       <div style="width:26px;height:26px;border-radius:50%;background:${col}33;color:${col};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">${init}</div>
-      <div class="settings-row-name">${e}${(state.inactiveEmployees||[]).includes(e)?'<span style="font-size:10px;margin-left:8px;padding:2px 6px;border-radius:4px;background:var(--red-bg);color:var(--red)">Inaktiv</span>':''}</div>
-      <div class="settings-row-actions"><button class="btn-sm" onclick="renameEmp(${i})">Umbenennen</button>${(state.inactiveEmployees||[]).includes(e)?'<button class="btn-sm" style="color:var(--green)" onclick="reactivateEmp('+i+')">✓ Reaktivieren</button>':'<button class="btn-sm danger" onclick="deactivateEmp('+i+')">Deaktivieren</button>'}</div>
+      <div class="settings-row-name">${e}${isInactive?'<span style="font-size:10px;margin-left:8px;padding:2px 6px;border-radius:4px;background:var(--red-bg);color:var(--red)">Inaktiv</span>':''}${dateInfo?`<div style="font-size:10px;color:var(--text3);margin-top:2px">${dateInfo}</div>`:''}</div>
+      <div class="settings-row-actions"><button class="btn-sm" onclick="renameEmp(${i})">Umbenennen</button>${isInactive?'<button class="btn-sm" style="color:var(--green)" onclick="reactivateEmp('+i+')">✓ Reaktivieren</button>':'<button class="btn-sm danger" onclick="deactivateEmp('+i+')">Deaktivieren</button>'}<button class="btn-sm" onclick="openDatesModal(${i})">Ein-/Austritt</button></div>
     </div>`;
   }).join('');
+  const archivedRows=archivedIdx.map(i=>{
+    const e=state.employees[i];
+    const col=COLORS[i%COLORS.length];const init=e.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+    const d=empDates(e);
+    return `<div class="settings-row">
+      <div style="width:26px;height:26px;border-radius:50%;background:${col}33;color:${col};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;opacity:.6">${init}</div>
+      <div class="settings-row-name" style="opacity:.6">${e}<div style="font-size:10px;color:var(--text3);margin-top:2px">${d.eintritt?`Eintritt ${fmtDate(d.eintritt)} · `:''}Austritt ${fmtDate(d.austritt)}</div></div>
+      <div class="settings-row-actions"><button class="btn-sm" style="color:var(--green)" onclick="reactivateEmp(${i})">✓ Reaktivieren</button></div>
+    </div>`;
+  }).join('');
+  const archivedSection=archivedIdx.length?`<div class="settings-section" style="margin-top:16px">
+    <div class="settings-section-title" style="cursor:pointer;display:flex;align-items:center;gap:6px" onclick="toggleArchived()">${state.showArchived?'▾':'▸'} Archiviert (${archivedIdx.length}) <span style="font-size:11px;font-weight:400;color:var(--text3)">– zählt nicht mehr zu den Mitarbeitern, vergangene Einsätze bleiben sichtbar</span></div>
+    ${state.showArchived?archivedRows:''}
+  </div>`:'';
   const vehRows=state.vehicles.map((v,i)=>`<div class="settings-row" draggable="true" ondragstart="dragStart(event,'veh',${i})" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropItem(event,'veh',${i})">
     <span class="drag-handle">⠿</span><span class="settings-tag">${i+1}</span>
     <div class="settings-row-name">${v}</div>
@@ -772,12 +806,14 @@ function renderSettingsView(){
   </div>`).join('');
   document.getElementById('mainContent').innerHTML=`<div class="settings-wrap">
     <h2 style="font-size:16px;font-weight:700;margin-bottom:20px">Einstellungen</h2>
-    <div class="settings-section"><div class="settings-section-title">Mitarbeiter (${state.employees.length}) <span style="font-size:11px;font-weight:400;color:var(--text3)">– Drag & Drop zum Sortieren</span></div>${empRows}<button class="btn-add" onclick="addEmp()">+ Mitarbeiter hinzufügen</button></div>
+    <div class="settings-section"><div class="settings-section-title">Mitarbeiter (${visibleIdx.length}) <span style="font-size:11px;font-weight:400;color:var(--text3)">– Drag & Drop zum Sortieren</span></div>${empRows}<button class="btn-add" onclick="addEmp()">+ Mitarbeiter hinzufügen</button></div>
+    ${archivedSection}
     <div class="settings-section"><div class="settings-section-title">Fahrzeuge (${state.vehicles.length})</div>${vehRows}<button class="btn-add" onclick="addVeh()">+ Fahrzeug hinzufügen</button></div>
   </div>`;
 }
 
-function saveSettings(){fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[]},100);}
+function saveSettings(){fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[],employeeDates:state.employeeDates||{}},100);}
+function toggleArchived(){state.showArchived=!state.showArchived;renderSettingsView();}
 function dragStart(e,type,idx){dragSrcIdx=idx;dragType=type;e.currentTarget.classList.add('dragging');e.dataTransfer.effectAllowed='move';}
 function dragOver(e){e.preventDefault();e.currentTarget.classList.add('drag-over');}
 function dragLeave(e){e.currentTarget.classList.remove('drag-over');}
@@ -801,11 +837,29 @@ function deactivateEmp(i){
 }
 function reactivateEmp(i){
   const emp=state.employees[i];
-  if(!state.inactiveEmployees)return;
-  state.inactiveEmployees=state.inactiveEmployees.filter(e=>e!==emp);
-  saveSettings();showToast(emp+' reaktiviert','success');
+  state.inactiveEmployees=(state.inactiveEmployees||[]).filter(e=>e!==emp);
+  if(state.employeeDates&&state.employeeDates[emp])state.employeeDates[emp].austritt=undefined;
+  saveSettings();showToast(emp+' reaktiviert','success');renderSettingsView();
 }
-function addEmp(){showModal({title:'Mitarbeiter hinzufügen',content:`<input class="modal-input" id="nn" placeholder="Name">`,actions:[{label:'Abbrechen',cancel:true},{label:'Hinzufügen',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){state.employees.push(v);saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
+function openDatesModal(i){
+  const emp=state.employees[i];
+  const d=empDates(emp);
+  showModal({title:'Ein-/Austritt: '+emp,
+    content:`<label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">Eintrittsdatum</label>
+    <input type="date" class="modal-input" id="dEin" value="${d.eintritt||''}">
+    <label style="font-size:12px;color:var(--text2);display:block;margin:12px 0 4px">Austrittsdatum</label>
+    <input type="date" class="modal-input" id="dAus" value="${d.austritt||''}">
+    <p style="font-size:11px;color:var(--text3);margin-top:10px">Wird ein Austrittsdatum gesetzt, das erreicht ist, wird der Mitarbeiter automatisch archiviert (zählt nicht mehr mit, vergangene Einsätze bleiben sichtbar).</p>`,
+    actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{
+      const ein=document.getElementById('dEin').value;
+      const aus=document.getElementById('dAus').value;
+      if(!state.employeeDates)state.employeeDates={};
+      state.employeeDates[emp]={eintritt:ein||undefined,austritt:aus||undefined};
+      saveSettings();closeModal();renderSettingsView();
+      showToast(aus&&aus<=dateKey(new Date())?emp+' archiviert':'Daten gespeichert','success');
+    }}]});
+}
+function addEmp(){showModal({title:'Mitarbeiter hinzufügen',content:`<input class="modal-input" id="nn" placeholder="Name">`,actions:[{label:'Abbrechen',cancel:true},{label:'Hinzufügen',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){state.employees.push(v);if(!state.employeeDates)state.employeeDates={};state.employeeDates[v]={eintritt:dateKey(new Date())};saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
 function renameVeh(i){showModal({title:'Fahrzeug umbenennen',content:`<input class="modal-input" id="nn" value="${state.vehicles[i]}">`,actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){state.vehicles[i]=v;saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
 function removeVeh(i){state.vehicles.splice(i,1);saveSettings();renderSettingsView();}
 function addVeh(){showModal({title:'Fahrzeug hinzufügen',content:`<input class="modal-input" id="nn" placeholder="Fahrzeugname">`,actions:[{label:'Abbrechen',cancel:true},{label:'Hinzufügen',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){state.vehicles.push(v);saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
