@@ -640,6 +640,7 @@ function setGlobalStatus(emp,status){
   const plan=getDayPlan(state.selectedDate);
   if(!plan.globalStatus)plan.globalStatus={};
   if(status==='')delete plan.globalStatus[emp];else plan.globalStatus[emp]=status;
+  if(status==='absent'){(plan.sites||[]).forEach(site=>{if(site.assignments)delete site.assignments[emp];});}
   fbWrite('plans/'+dateKey(state.selectedDate), getDayPlan(state.selectedDate));
   closeCtx();closeModal();
 }
@@ -647,13 +648,14 @@ function setGlobalStatus(emp,status){
 function editSite(siteId){
   const plan=getDayPlan(state.selectedDate);
   const site=plan.sites.find(s=>s.id===siteId);
+  const saveSite=()=>{
+    site.name=document.getElementById('siteName').value;
+    fbWrite('plans/'+dateKey(state.selectedDate),getDayPlan(state.selectedDate));
+    closeModal();
+  };
   showModal({title:'Baustelle bearbeiten',content:`<input class="modal-input" id="siteName" value="${site.name||''}" placeholder="Baustellenname">`,
-    actions:[{label:'Löschen',action:()=>deleteSite(siteId),danger:true},{label:'Abbrechen',cancel:true},{label:'Speichern',action:()=>{
-      site.name=document.getElementById('siteName').value;
-      fbWrite('plans/'+dateKey(state.selectedDate),getDayPlan(state.selectedDate));
-      closeModal();
-    },primary:true}]});
-  setTimeout(()=>document.getElementById('siteName')?.focus(),50);
+    actions:[{label:'Löschen',action:()=>deleteSite(siteId),danger:true},{label:'Abbrechen',cancel:true},{label:'Speichern',action:saveSite,primary:true}]});
+  setTimeout(()=>{const inp=document.getElementById('siteName');if(inp){inp.focus();inp.addEventListener('keydown',e=>{if(e.key==='Enter')saveSite();});}},50);
 }
 
 function deleteSite(siteId){
