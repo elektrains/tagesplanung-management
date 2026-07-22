@@ -248,6 +248,12 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .kn-empty{color:var(--text3);font-size:12px;text-align:center;padding:24px;}
 .kn-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
 .kn-form-label{font-size:11px;color:var(--text2);display:block;margin:8px 0 3px;}
+.kn-file-row{display:flex;align-items:center;gap:8px;padding:6px 0;flex-wrap:wrap;}
+.kn-file-label{font-size:12px;color:var(--text2);min-width:150px;}
+.kn-file-link{font-size:12px;color:var(--accent);text-decoration:none;}
+.kn-file-link:hover{text-decoration:underline;}
+.kn-file-empty{font-size:11px;color:var(--text3);}
+.kn-file-status{font-size:11px;color:var(--text3);}
 /* Loader */
 .loader{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:9999;}
 .loader-logo{height:60px;}
@@ -353,6 +359,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
 
 <script>
 // ===== FIREBASE CONFIG =====
@@ -369,6 +376,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db   = firebase.database();
 const auth = firebase.auth();
+const storage = firebase.storage();
 
 // ===== COLORS =====
 const COLORS = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#14b8a6','#84cc16','#f97316','#a855f7','#0ea5e9','#22c55e','#eab308','#e11d48','#7c3aed','#059669','#d97706','#2563eb','#dc2626'];
@@ -831,8 +839,57 @@ function knPlOptions(sel){
   return ['','TH','CB'].map(v=>`<option value="${v}"${v===sel?' selected':''}>${v===''?'– PL wählen –':v==='TH'?'Timo Hunziker':'Christoph Baillif'}</option>`).join('');
 }
 
-function knFormContent(k){
+const KN_FILE_LABELS={aufgebot:'Aufgebot',maengelliste:'Mängelliste',rechnung:'Rechnung Kontrolleur'};
+
+function knFileSlotHtml(id,slot,fileObj){
+  return `<div class="kn-file-row" id="knFileSlot_${slot}">
+    <span class="kn-file-label">${KN_FILE_LABELS[slot]}</span>
+    ${fileObj?`<a href="${fileObj.url}" target="_blank" rel="noopener" class="kn-file-link">📄 ${escHtml(fileObj.name)}</a><button type="button" class="btn-sm danger" onclick="knDeleteFile('${id}','${slot}')">Entfernen</button>`:`<span class="kn-file-empty">Keine Datei</span>`}
+    <input type="file" id="knFileInput_${slot}" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="knUploadFile('${id}','${slot}',this)">
+    <button type="button" class="btn-sm" onclick="document.getElementById('knFileInput_${slot}').click()">${fileObj?'Ersetzen':'Hochladen'}</button>
+  </div>`;
+}
+
+function knUploadFile(id,slot,inputEl){
+  const file=inputEl.files[0];if(!file)return;
+  const wrap=document.getElementById('knFileSlot_'+slot);
+  if(wrap) wrap.insertAdjacentHTML('beforeend','<span class="kn-file-status">Lädt hoch…</span>');
+  const path='kontrollen/'+id+'/'+slot+'_'+Date.now()+'_'+file.name;
+  storage.ref(path).put(file).then(snap=>snap.ref.getDownloadURL()).then(url=>{
+    const fileObj={name:file.name,url,path,uploadedAt:Date.now()};
+    return db.ref('kontrollen/'+id+'/files/'+slot).set(fileObj).then(()=>fileObj);
+  }).then(fileObj=>{
+    if(!state.kontrollen[id])state.kontrollen[id]={};
+    if(!state.kontrollen[id].files)state.kontrollen[id].files={};
+    state.kontrollen[id].files[slot]=fileObj;
+    const w=document.getElementById('knFileSlot_'+slot);
+    if(w)w.outerHTML=knFileSlotHtml(id,slot,fileObj);
+    showToast('✓ Datei hochgeladen','success');
+  }).catch(e=>{showToast('Fehler: '+e.message,'error');document.getElementById('knFileSlot_'+slot)?.querySelector('.kn-file-status')?.remove();});
+}
+
+function knDeleteFile(id,slot){
+  if(!confirm('Datei entfernen?'))return;
+  const f=state.kontrollen[id]?.files?.[slot];
+  const cleanup=()=>{
+    db.ref('kontrollen/'+id+'/files/'+slot).remove().then(()=>{
+      if(state.kontrollen[id]?.files)delete state.kontrollen[id].files[slot];
+      const w=document.getElementById('knFileSlot_'+slot);
+      if(w)w.outerHTML=knFileSlotHtml(id,slot,null);
+      showToast('Datei entfernt','success');
+    }).catch(e=>showToast('Fehler: '+e.message,'error'));
+  };
+  if(f?.path){storage.ref(f.path).delete().catch(()=>{}).finally(cleanup);}else cleanup();
+}
+
+function knFormContent(k,id){
   k=k||{};
+  const fileSection=id?`<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
+    <div class="kn-form-label" style="margin-top:0">Dokumente</div>
+    ${knFileSlotHtml(id,'aufgebot',k.files?.aufgebot)}
+    ${knFileSlotHtml(id,'maengelliste',k.files?.maengelliste)}
+    ${knFileSlotHtml(id,'rechnung',k.files?.rechnung)}
+  </div>`:`<div style="margin-top:12px;font-size:11px;color:var(--text3)">Dokumente können nach dem Erstellen hochgeladen werden.</div>`;
   return `
   <div class="kn-form-grid">
     <div><label class="kn-form-label">Name</label><input class="modal-input" id="knName" value="${escHtml(k.name)}" placeholder="Name"></div>
@@ -856,7 +913,8 @@ function knFormContent(k){
     <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="knErledigt"${k.erledigt?' checked':''}> Erledigt/Abgemeldet</label>
     <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="knVerrechnet"${k.verrechnet?' checked':''}> Verrechnet (RG)</label>
     <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="knRgk"${k.rgk?' checked':''}> Rechnung Swisselko weiterverrechnet (RGK)</label>
-  </div>`;
+  </div>
+  ${fileSection}`;
 }
 
 function knReadForm(){
@@ -903,10 +961,11 @@ function editKontrolle(id){
     closeModal();
   };
   const del=()=>{
+    Object.values(k.files||{}).forEach(f=>{if(f?.path)storage.ref(f.path).delete().catch(()=>{});});
     db.ref('kontrollen/'+id).remove().catch(e=>showToast('Fehler: '+e.message,'error'));
     closeModal();
   };
-  showModal({title:'Kontrolle bearbeiten',content:knFormContent(k),actions:[{label:'Löschen',action:del,danger:true},{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:save}]});
+  showModal({title:'Kontrolle bearbeiten',content:knFormContent(k,id),actions:[{label:'Löschen',action:del,danger:true},{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:save}]});
   setTimeout(()=>document.getElementById('knName')?.focus(),50);
 }
 
