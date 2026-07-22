@@ -160,6 +160,13 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .todo-title{font-weight:600;font-size:13px;}
 .todo-desc{font-size:12px;color:var(--text2);margin-top:2px;white-space:pre-wrap;}
 .todo-assignee{font-size:11px;background:var(--bg4);border:1px solid var(--border2);color:var(--text2);padding:2px 8px;border-radius:20px;white-space:nowrap;}
+.todo-due{font-size:11px;background:var(--bg4);border:1px solid var(--border2);color:var(--text2);padding:2px 8px;border-radius:20px;white-space:nowrap;}
+.todo-item.overdue{background:var(--red-bg);border:1px solid var(--red);}
+.todo-item.overdue:hover{background:var(--red-bg);filter:brightness(1.1);}
+.todo-item.overdue .todo-title{color:#fff;}
+.todo-item.overdue .todo-desc{color:rgba(255,255,255,.8);}
+.todo-item.overdue .todo-due{background:var(--red);border-color:var(--red);color:#fff;font-weight:700;}
+.todo-item.overdue .todo-check{border-color:#fff;}
 .todo-empty{color:var(--text3);font-size:12px;text-align:center;padding:10px;}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;}
 .btn-cancel{padding:7px 16px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--text2);cursor:pointer;font-size:13px;}
@@ -633,16 +640,20 @@ function escHtml(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt
 
 function renderTodoPanel(){
   const el=document.getElementById('todoPanel');if(!el)return;
+  const todayKey=dateKey(new Date());
   const todos=Object.entries(state.todos||{}).sort((a,b)=>(a[1].createdAt||0)-(b[1].createdAt||0));
-  const items=todos.map(([id,t])=>`
-    <div class="todo-item">
+  const items=todos.map(([id,t])=>{
+    const overdue=!!t.due&&t.due<=todayKey;
+    return `
+    <div class="todo-item${overdue?' overdue':''}">
       <div class="todo-check" onclick="completeTodo('${id}')" title="Erledigt – Aufgabe wird entfernt"></div>
       <div class="todo-body" onclick="editTodo('${id}')">
         <div class="todo-title">${escHtml(t.title)}</div>
         ${t.desc?`<div class="todo-desc">${escHtml(t.desc)}</div>`:''}
       </div>
+      ${t.due?`<span class="todo-due">bis ${fmtDate(t.due)}</span>`:''}
       ${t.assignee?`<span class="todo-assignee">${escHtml(t.assignee)}</span>`:''}
-    </div>`).join('');
+    </div>`;}).join('');
   el.innerHTML=`
     <div class="todo-panel">
       <div class="todo-header"><span>📌 Elektra Allgemein ToDo's</span><button class="action-btn" onclick="addTodo()">+ Aufgabe</button></div>
@@ -661,14 +672,16 @@ function addTodo(){
     const title=document.getElementById('todoTitle').value.trim();
     if(!title){showToast('Bitte Titel eingeben','error');return;}
     const id='t'+Date.now();
-    db.ref('todos/'+id).set({title,desc:document.getElementById('todoDesc').value.trim(),assignee:document.getElementById('todoAssignee').value,createdAt:Date.now()})
+    db.ref('todos/'+id).set({title,desc:document.getElementById('todoDesc').value.trim(),assignee:document.getElementById('todoAssignee').value,due:document.getElementById('todoDue').value,createdAt:Date.now()})
       .catch(e=>showToast('Fehler: '+e.message,'error'));
     closeModal();
   };
   showModal({title:'Neue Aufgabe',content:`
     <input class="modal-input" id="todoTitle" placeholder="Titel" style="margin-bottom:8px">
     <textarea class="modal-input" id="todoDesc" placeholder="Beschreibung (optional)" rows="3" style="margin-bottom:8px;resize:vertical"></textarea>
-    <select class="modal-input" id="todoAssignee">${todoAssigneeOptions('')}</select>`,
+    <select class="modal-input" id="todoAssignee" style="margin-bottom:8px">${todoAssigneeOptions('')}</select>
+    <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Zu erledigen bis (optional)</label>
+    <input type="date" class="modal-input" id="todoDue">`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Erstellen',primary:true,action:save}]});
   setTimeout(()=>{const inp=document.getElementById('todoTitle');if(inp){inp.focus();inp.addEventListener('keydown',e=>{if(e.key==='Enter')save();});}},50);
 }
@@ -678,14 +691,16 @@ function editTodo(id){
   const save=()=>{
     const title=document.getElementById('todoTitle').value.trim();
     if(!title){showToast('Bitte Titel eingeben','error');return;}
-    db.ref('todos/'+id).update({title,desc:document.getElementById('todoDesc').value.trim(),assignee:document.getElementById('todoAssignee').value})
+    db.ref('todos/'+id).update({title,desc:document.getElementById('todoDesc').value.trim(),assignee:document.getElementById('todoAssignee').value,due:document.getElementById('todoDue').value})
       .catch(e=>showToast('Fehler: '+e.message,'error'));
     closeModal();
   };
   showModal({title:'Aufgabe bearbeiten',content:`
     <input class="modal-input" id="todoTitle" value="${escHtml(t.title)}" placeholder="Titel" style="margin-bottom:8px">
     <textarea class="modal-input" id="todoDesc" placeholder="Beschreibung (optional)" rows="3" style="margin-bottom:8px;resize:vertical">${escHtml(t.desc)}</textarea>
-    <select class="modal-input" id="todoAssignee">${todoAssigneeOptions(t.assignee||'')}</select>`,
+    <select class="modal-input" id="todoAssignee" style="margin-bottom:8px">${todoAssigneeOptions(t.assignee||'')}</select>
+    <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Zu erledigen bis (optional)</label>
+    <input type="date" class="modal-input" id="todoDue" value="${escHtml(t.due||'')}">`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:save}]});
   setTimeout(()=>{const inp=document.getElementById('todoTitle');if(inp){inp.focus();inp.addEventListener('keydown',e=>{if(e.key==='Enter')save();});}},50);
 }
