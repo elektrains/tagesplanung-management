@@ -229,7 +229,9 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .kn-toptab.active{border-color:var(--accent);color:#fff;background:var(--bg3);}
 .kn-search{background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:7px 12px;font-size:12px;color:var(--text);outline:none;width:220px;}
 .kn-search:focus{border-color:var(--accent);}
-.kn-row{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:grid;grid-template-columns:1.5fr 1fr .7fr 1fr auto;gap:10px;align-items:center;margin-bottom:8px;cursor:pointer;}
+.kn-row{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:grid;grid-template-columns:auto 1.5fr 1fr .7fr 1fr auto;gap:10px;align-items:center;margin-bottom:8px;cursor:pointer;}
+.kn-selectall-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:12px;color:var(--text2);gap:10px;flex-wrap:wrap;}
+.kn-bulkbar{display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--accent);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--text);}
 .kn-row:hover{border-color:var(--border2);}
 .kn-row.kn-overdue{background:var(--red-bg);border-color:var(--red);}
 .kn-row.kn-overdue .kn-name,.kn-row.kn-overdue .kn-sub{color:#fff;}
@@ -402,6 +404,7 @@ let state = {
   meta: {},
   knView: 'offen',
   knFilter: '',
+  knSelected: {},
   settings: {},
   myId: 'user_' + Math.random().toString(36).slice(2,8),
   myName: '',
@@ -763,7 +766,7 @@ function completeTodo(id){
 }
 
 // ===== KONTROLLEN =====
-function knSetView(v){state.knView=v;renderKontrollenView();}
+function knSetView(v){state.knView=v;state.knSelected={};renderKontrollenView();}
 function knFilterInput(){state.knFilter=document.getElementById('knSearch')?.value||'';renderKnList();}
 
 function knSortedEntries(){
@@ -793,6 +796,10 @@ function renderKontrollenView(){
         <button class="action-btn primary" onclick="addKontrolle()">+ Neue Kontrolle</button>
       </div>
     </div>
+    <div class="kn-selectall-row">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="knSelectAllBox" onchange="knToggleSelectAll(this.checked)"> Alle auf dieser Seite auswählen</label>
+      <span id="knBulkBar"></span>
+    </div>
     <div id="knList"></div>
   </div>`;
   renderKnList();
@@ -802,10 +809,11 @@ function renderKnList(){
   const el=document.getElementById('knList');if(!el)return;
   const todayKey=dateKey(new Date());
   const entries=knSortedEntries();
-  if(entries.length===0){el.innerHTML='<div class="kn-empty">Keine Einträge</div>';return;}
+  if(entries.length===0){el.innerHTML='<div class="kn-empty">Keine Einträge</div>';renderKnBulkBar();return;}
   el.innerHTML=entries.map(([id,k])=>{
     const overdue=state.knView==='offen'&&!!k.frist&&k.frist<=todayKey;
     return `<div class="kn-row${overdue?' kn-overdue':''}" onclick="editKontrolle('${id}')">
+      <div onclick="event.stopPropagation()"><input type="checkbox" ${state.knSelected[id]?'checked':''} onchange="knToggleSelect('${id}',this.checked)"></div>
       <div>
         <div class="kn-name">${escHtml(k.name)}${k.vorname?', '+escHtml(k.vorname):''}</div>
         <div class="kn-sub">${escHtml(k.objektadresse)}${k.objektplz?', '+escHtml(k.objektplz):''}</div>
@@ -821,6 +829,46 @@ function renderKnList(){
       </div>
     </div>`;
   }).join('');
+  renderKnBulkBar();
+}
+
+// ===== KONTROLLEN: MEHRFACHAUSWAHL & LÖSCHEN =====
+function knToggleSelect(id,checked){
+  if(checked)state.knSelected[id]=true;else delete state.knSelected[id];
+  renderKnBulkBar();
+}
+
+function knToggleSelectAll(checked){
+  const entries=knSortedEntries();
+  if(checked)entries.forEach(([id])=>{state.knSelected[id]=true;});
+  else entries.forEach(([id])=>{delete state.knSelected[id];});
+  renderKnList();
+}
+
+function knClearSelection(){
+  state.knSelected={};
+  const box=document.getElementById('knSelectAllBox');if(box)box.checked=false;
+  renderKnList();
+}
+
+function renderKnBulkBar(){
+  const el=document.getElementById('knBulkBar');if(!el)return;
+  const count=Object.keys(state.knSelected||{}).length;
+  el.innerHTML=count?`<div class="kn-bulkbar"><span>${count} ausgewählt</span><button class="btn-sm" onclick="knClearSelection()">Auswahl aufheben</button><button class="btn-sm danger" onclick="knBulkDelete()">🗑 Löschen</button></div>`:'';
+}
+
+function knBulkDelete(){
+  const ids=Object.keys(state.knSelected||{});
+  if(ids.length===0)return;
+  if(!confirm(ids.length+' Eintrag/Einträge inkl. aller angehängten Dokumente unwiderruflich löschen?'))return;
+  Promise.all(ids.map(id=>{
+    const k=(state.kontrollen||{})[id]||{};
+    const fileDeletes=Object.values(k.files||{}).map(f=>f&&f.path?storage.ref(f.path).delete().catch(()=>{}):Promise.resolve());
+    return Promise.all(fileDeletes).then(()=>db.ref('kontrollen/'+id).remove());
+  })).then(()=>{
+    showToast('✓ '+ids.length+' Einträge gelöscht','success');
+    state.knSelected={};
+  }).catch(e=>showToast('Fehler: '+e.message,'error'));
 }
 
 function knToggleFlag(id,field){
