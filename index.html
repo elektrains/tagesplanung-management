@@ -360,6 +360,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
 
 <script>
 // ===== FIREBASE CONFIG =====
@@ -377,6 +378,7 @@ firebase.initializeApp(firebaseConfig);
 const db   = firebase.database();
 const auth = firebase.auth();
 const storage = firebase.storage();
+const functions = firebase.functions();
 
 // ===== COLORS =====
 const COLORS = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#14b8a6','#84cc16','#f97316','#a855f7','#0ea5e9','#22c55e','#eab308','#e11d48','#7c3aed','#059669','#d97706','#2563eb','#dc2626'];
@@ -786,6 +788,8 @@ function renderKontrollenView(){
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <input class="kn-search" id="knSearch" placeholder="Suche Name, Objekt..." oninput="knFilterInput()" value="${escHtml(state.knFilter||'')}">
+        <input type="file" id="knExtractInput" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="knExtractFromFile(this)">
+        <button class="action-btn" onclick="document.getElementById('knExtractInput').click()">🤖 Aus Datei erstellen</button>
         <button class="action-btn primary" onclick="addKontrolle()">+ Neue Kontrolle</button>
       </div>
     </div>
@@ -850,15 +854,19 @@ function knFileSlotHtml(id,slot,fileObj){
   </div>`;
 }
 
+function knUploadFileObj(id,slot,file){
+  const path='kontrollen/'+id+'/'+slot+'_'+Date.now()+'_'+file.name;
+  return storage.ref(path).put(file).then(snap=>snap.ref.getDownloadURL()).then(url=>{
+    const fileObj={name:file.name,url,path,uploadedAt:Date.now()};
+    return db.ref('kontrollen/'+id+'/files/'+slot).set(fileObj).then(()=>fileObj);
+  });
+}
+
 function knUploadFile(id,slot,inputEl){
   const file=inputEl.files[0];if(!file)return;
   const wrap=document.getElementById('knFileSlot_'+slot);
   if(wrap) wrap.insertAdjacentHTML('beforeend','<span class="kn-file-status">Lädt hoch…</span>');
-  const path='kontrollen/'+id+'/'+slot+'_'+Date.now()+'_'+file.name;
-  storage.ref(path).put(file).then(snap=>snap.ref.getDownloadURL()).then(url=>{
-    const fileObj={name:file.name,url,path,uploadedAt:Date.now()};
-    return db.ref('kontrollen/'+id+'/files/'+slot).set(fileObj).then(()=>fileObj);
-  }).then(fileObj=>{
+  knUploadFileObj(id,slot,file).then(fileObj=>{
     if(!state.kontrollen[id])state.kontrollen[id]={};
     if(!state.kontrollen[id].files)state.kontrollen[id].files={};
     state.kontrollen[id].files[slot]=fileObj;
@@ -866,6 +874,54 @@ function knUploadFile(id,slot,inputEl){
     if(w)w.outerHTML=knFileSlotHtml(id,slot,fileObj);
     showToast('✓ Datei hochgeladen','success');
   }).catch(e=>{showToast('Fehler: '+e.message,'error');document.getElementById('knFileSlot_'+slot)?.querySelector('.kn-file-status')?.remove();});
+}
+
+// ===== KI-EXTRAKTION =====
+let knExtractPending=null;
+
+function knFileToBase64(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(reader.result.split(',')[1]);
+    reader.onerror=reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function knSlotForDocType(docType){
+  return docType==='aufgebot'||docType==='maengelliste'||docType==='rechnung'?docType:null;
+}
+
+function knExtractFromFile(inputEl){
+  const file=inputEl.files[0];if(!file)return;
+  inputEl.value='';
+  showToast('Analysiere Dokument…','success');
+  knFileToBase64(file).then(base64=>functions.httpsCallable('extractKontrolle')({base64,mimeType:file.type||'application/pdf'}))
+    .then(res=>{knExtractPending={file};openKnExtractedModal(res.data||{});})
+    .catch(e=>{knExtractPending=null;showToast('Fehler bei der Analyse: '+e.message,'error');});
+}
+
+function openKnExtractedModal(data){
+  const save=()=>{
+    const formData=knReadForm();
+    if(!formData.name){showToast('Bitte Name eingeben','error');return;}
+    const id='k'+Date.now();
+    const pendingFile=knExtractPending?.file;
+    const slot=knSlotForDocType(data.docType);
+    db.ref('kontrollen/'+id).set({...formData,createdAt:Date.now()}).then(()=>{
+      if(pendingFile&&slot){
+        knUploadFileObj(id,slot,pendingFile).then(fileObj=>{
+          if(!state.kontrollen[id])state.kontrollen[id]={};
+          if(!state.kontrollen[id].files)state.kontrollen[id].files={};
+          state.kontrollen[id].files[slot]=fileObj;
+        }).catch(()=>{});
+      }
+    }).catch(e=>showToast('Fehler: '+e.message,'error'));
+    knExtractPending=null;
+    closeModal();
+  };
+  showModal({title:'Von KI erkannt – bitte prüfen und speichern',content:knFormContent(data),actions:[{label:'Abbrechen',cancel:true},{label:'Erstellen',primary:true,action:save}]});
+  setTimeout(()=>document.getElementById('knName')?.focus(),50);
 }
 
 function knDeleteFile(id,slot){
