@@ -843,6 +843,30 @@ function knPlOptions(sel){
   return ['','TH','CB'].map(v=>`<option value="${v}"${v===sel?' selected':''}>${v===''?'– PL wählen –':v==='TH'?'Timo Hunziker':'Christoph Baillif'}</option>`).join('');
 }
 
+function knDetectPl(){
+  const n=(state.myName||'').toLowerCase();
+  if(n.includes('timo'))return'TH';
+  if(n.includes('christoph'))return'CB';
+  return'';
+}
+
+const KN_VERSENDET_OPTIONS=['Swisselko','electrocontrol','energiecheck','ET Swiss'];
+
+function knVersendetSelectHtml(sel){
+  const isOther=!!sel&&!KN_VERSENDET_OPTIONS.includes(sel);
+  const opts=['<option value="">– bitte wählen –</option>']
+    .concat(KN_VERSENDET_OPTIONS.map(o=>`<option value="${o}"${o===sel?' selected':''}>${o}</option>`))
+    .concat([`<option value="andere"${isOther?' selected':''}>Andere…</option>`]);
+  return `<select class="modal-input" id="knVersendetAn" onchange="knToggleVersendetAndere()">${opts.join('')}</select>
+    <input class="modal-input" id="knVersendetAnAndere" placeholder="Anbieter eingeben" style="margin-top:6px;${isOther?'':'display:none'}" value="${escHtml(isOther?sel:'')}">`;
+}
+
+function knToggleVersendetAndere(){
+  const sel=document.getElementById('knVersendetAn')?.value;
+  const other=document.getElementById('knVersendetAnAndere');
+  if(other)other.style.display=sel==='andere'?'block':'none';
+}
+
 const KN_FILE_LABELS={aufgebot:'Aufgebot',maengelliste:'Mängelliste',rechnung:'Rechnung Kontrolleur'};
 
 function knFileSlotHtml(id,slot,fileObj){
@@ -858,7 +882,10 @@ function knUploadFileObj(id,slot,file){
   const path='kontrollen/'+id+'/'+slot+'_'+Date.now()+'_'+file.name;
   return storage.ref(path).put(file).then(snap=>snap.ref.getDownloadURL()).then(url=>{
     const fileObj={name:file.name,url,path,uploadedAt:Date.now()};
-    return db.ref('kontrollen/'+id+'/files/'+slot).set(fileObj).then(()=>fileObj);
+    const updates={};
+    updates['files/'+slot]=fileObj;
+    if(slot==='maengelliste')updates.maengellisteErhaltenAm=dateKey(new Date());
+    return db.ref('kontrollen/'+id).update(updates).then(()=>fileObj);
   });
 }
 
@@ -902,12 +929,16 @@ function knExtractFromFile(inputEl){
 }
 
 function openKnExtractedModal(data){
+  data={...data,bemerkungen:'',maengellisteErhaltenAm:null,pl:knDetectPl()};
+  const docType=data.docType;
   const save=()=>{
     const formData=knReadForm();
     if(!formData.name){showToast('Bitte Name eingeben','error');return;}
+    if(!formData.pl){showToast('Bitte Projektleiter wählen','error');return;}
+    if(!formData.versendetAn){showToast('Bitte angeben, an wen versendet wurde','error');return;}
     const id='k'+Date.now();
     const pendingFile=knExtractPending?.file;
-    const slot=knSlotForDocType(data.docType);
+    const slot=knSlotForDocType(docType);
     db.ref('kontrollen/'+id).set({...formData,createdAt:Date.now()}).then(()=>{
       if(pendingFile&&slot){
         knUploadFileObj(id,slot,pendingFile).then(fileObj=>{
@@ -954,7 +985,7 @@ function knFormContent(k,id){
     <div><label class="kn-form-label">Projektleiter</label><select class="modal-input" id="knPl">${knPlOptions(k.pl||'')}</select></div>
     <div><label class="kn-form-label">Objektadresse</label><input class="modal-input" id="knObjekt" value="${escHtml(k.objektadresse)}" placeholder="Objektadresse"></div>
     <div><label class="kn-form-label">Objekt PLZ</label><input class="modal-input" id="knObjektPlz" value="${escHtml(k.objektplz)}" placeholder="Objekt PLZ"></div>
-    <div><label class="kn-form-label">Versendet an</label><input class="modal-input" id="knVersendetAn" value="${escHtml(k.versendetAn)}" placeholder="z.B. Swisselko"></div>
+    <div><label class="kn-form-label">Versendet an</label>${knVersendetSelectHtml(k.versendetAn||'')}</div>
     <div><label class="kn-form-label">Erhalten am (Aufgebot)</label><input type="date" class="modal-input" id="knErhaltenAm" value="${k.erhaltenAm||''}"></div>
     <div><label class="kn-form-label">Frist</label><input type="date" class="modal-input" id="knFrist" value="${k.frist||''}"></div>
     <div><label class="kn-form-label">1. Verlängerung</label><input type="date" class="modal-input" id="knVerl1" value="${k.verl1||''}"></div>
@@ -973,6 +1004,12 @@ function knFormContent(k,id){
   ${fileSection}`;
 }
 
+function knReadVersendetAn(){
+  const sel=document.getElementById('knVersendetAn')?.value||'';
+  if(sel==='andere')return(document.getElementById('knVersendetAnAndere')?.value||'').trim();
+  return sel;
+}
+
 function knReadForm(){
   return {
     name:document.getElementById('knName').value.trim(),
@@ -981,7 +1018,7 @@ function knReadForm(){
     pl:document.getElementById('knPl').value,
     objektadresse:document.getElementById('knObjekt').value.trim(),
     objektplz:document.getElementById('knObjektPlz').value.trim(),
-    versendetAn:document.getElementById('knVersendetAn').value.trim(),
+    versendetAn:knReadVersendetAn(),
     bemerkungen:document.getElementById('knBemerkungen').value.trim(),
     erhaltenAm:document.getElementById('knErhaltenAm').value||null,
     frist:document.getElementById('knFrist').value||null,
@@ -1004,7 +1041,7 @@ function addKontrolle(){
     db.ref('kontrollen/'+id).set({...data,createdAt:Date.now()}).catch(e=>showToast('Fehler: '+e.message,'error'));
     closeModal();
   };
-  showModal({title:'Neue Kontrolle',content:knFormContent({}),actions:[{label:'Abbrechen',cancel:true},{label:'Erstellen',primary:true,action:save}]});
+  showModal({title:'Neue Kontrolle',content:knFormContent({pl:knDetectPl()}),actions:[{label:'Abbrechen',cancel:true},{label:'Erstellen',primary:true,action:save}]});
   setTimeout(()=>document.getElementById('knName')?.focus(),50);
 }
 
