@@ -707,6 +707,7 @@ function renderTodoPanel(){
         ${t.desc?`<div class="todo-desc">${escHtml(t.desc)}</div>`:''}
       </div>
       ${t.due?`<span class="todo-due">bis ${fmtDate(t.due)}</span>`:''}
+      ${Object.keys(t.files||{}).length?`<span class="todo-assignee" title="Angehängte Dateien">📎 ${Object.keys(t.files).length}</span>`:''}
       ${t.assignee?`<span class="todo-assignee">${escHtml(t.assignee)}</span>`:''}
     </div>`;}).join('');
   el.innerHTML=`
@@ -736,7 +737,8 @@ function addTodo(){
     <textarea class="modal-input" id="todoDesc" placeholder="Beschreibung (optional)" rows="3" style="margin-bottom:8px;resize:vertical"></textarea>
     <select class="modal-input" id="todoAssignee" style="margin-bottom:8px">${todoAssigneeOptions('')}</select>
     <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Zu erledigen bis (optional)</label>
-    <input type="date" class="modal-input" id="todoDue">`,
+    <input type="date" class="modal-input" id="todoDue">
+    <div style="margin-top:12px;font-size:11px;color:var(--text3)">Dateien können nach dem Erstellen angehängt werden.</div>`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Erstellen',primary:true,action:save}]});
   setTimeout(()=>{const inp=document.getElementById('todoTitle');if(inp){inp.focus();inp.addEventListener('keydown',e=>{if(e.key==='Enter')save();});}},50);
 }
@@ -755,12 +757,65 @@ function editTodo(id){
     <textarea class="modal-input" id="todoDesc" placeholder="Beschreibung (optional)" rows="3" style="margin-bottom:8px;resize:vertical">${escHtml(t.desc)}</textarea>
     <select class="modal-input" id="todoAssignee" style="margin-bottom:8px">${todoAssigneeOptions(t.assignee||'')}</select>
     <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Zu erledigen bis (optional)</label>
-    <input type="date" class="modal-input" id="todoDue" value="${escHtml(t.due||'')}">`,
+    <input type="date" class="modal-input" id="todoDue" value="${escHtml(t.due||'')}">
+    ${todoAttachmentsHtml(id,t.files)}`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:save}]});
   setTimeout(()=>{const inp=document.getElementById('todoTitle');if(inp){inp.focus();inp.addEventListener('keydown',e=>{if(e.key==='Enter')save();});}},50);
 }
 
+function todoAttachmentsHtml(id,files){
+  const rows=Object.entries(files||{}).map(([fid,f])=>`<div class="kn-file-row" id="todoFile_${fid}">
+    <a href="${f.url}" target="_blank" rel="noopener" class="kn-file-link">📎 ${escHtml(f.name)}</a>
+    <button type="button" class="btn-sm danger" onclick="todoDeleteFile('${id}','${fid}')">Entfernen</button>
+  </div>`).join('');
+  return `<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+    <div class="kn-form-label" style="margin-top:0">Anhänge</div>
+    <div id="todoFileList_${id}">${rows||'<div class="kn-file-empty">Keine Dateien</div>'}</div>
+    <input type="file" id="todoFileInput_${id}" style="display:none" onchange="todoUploadFile('${id}',this)">
+    <button type="button" class="btn-sm" style="margin-top:6px" onclick="document.getElementById('todoFileInput_${id}').click()">+ Datei anhängen</button>
+  </div>`;
+}
+
+function todoUploadFile(id,inputEl){
+  const file=inputEl.files[0];if(!file)return;
+  const fid='f'+Date.now();
+  const path='todos/'+id+'/'+fid+'_'+file.name;
+  storage.ref(path).put(file).then(snap=>snap.ref.getDownloadURL()).then(url=>{
+    const fileObj={name:file.name,url,path,uploadedAt:Date.now()};
+    return db.ref('todos/'+id+'/files/'+fid).set(fileObj).then(()=>fileObj);
+  }).then(fileObj=>{
+    if(!state.todos[id])state.todos[id]={};
+    if(!state.todos[id].files)state.todos[id].files={};
+    state.todos[id].files[fid]=fileObj;
+    const list=document.getElementById('todoFileList_'+id);
+    if(list){
+      list.querySelector('.kn-file-empty')?.remove();
+      list.insertAdjacentHTML('beforeend',`<div class="kn-file-row" id="todoFile_${fid}"><a href="${fileObj.url}" target="_blank" rel="noopener" class="kn-file-link">📎 ${escHtml(fileObj.name)}</a><button type="button" class="btn-sm danger" onclick="todoDeleteFile('${id}','${fid}')">Entfernen</button></div>`);
+    }
+    showToast('✓ Datei angehängt','success');
+  }).catch(e=>showToast('Fehler: '+e.message,'error'));
+}
+
+function todoDeleteFile(id,fid){
+  if(!confirm('Datei entfernen?'))return;
+  const f=state.todos[id]?.files?.[fid];
+  const cleanup=()=>{
+    db.ref('todos/'+id+'/files/'+fid).remove().then(()=>{
+      if(state.todos[id]?.files)delete state.todos[id].files[fid];
+      document.getElementById('todoFile_'+fid)?.remove();
+      if(!Object.keys(state.todos[id]?.files||{}).length){
+        const list=document.getElementById('todoFileList_'+id);
+        if(list)list.innerHTML='<div class="kn-file-empty">Keine Dateien</div>';
+      }
+      showToast('Datei entfernt','success');
+    }).catch(e=>showToast('Fehler: '+e.message,'error'));
+  };
+  if(f?.path){storage.ref(f.path).delete().catch(()=>{}).finally(cleanup);}else cleanup();
+}
+
 function completeTodo(id){
+  const t=(state.todos||{})[id];
+  Object.values(t?.files||{}).forEach(f=>{if(f?.path)storage.ref(f.path).delete().catch(()=>{});});
   db.ref('todos/'+id).remove().catch(e=>showToast('Fehler: '+e.message,'error'));
   showToast('✓ Aufgabe erledigt','success');
 }
