@@ -223,15 +223,16 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .btn-add{display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:6px;border:1px dashed var(--border2);background:transparent;color:var(--accent);cursor:pointer;font-size:12px;margin-top:10px;transition:all .15s;width:100%;justify-content:center;}
 .btn-add:hover{background:var(--accent-glow);}
 /* Kontrollen */
-.kn-wrap{padding:24px;max-width:1100px;}
+.kn-wrap{padding:24px;max-width:1400px;}
 .kn-toptabs{display:flex;gap:6px;margin-bottom:16px;}
 .kn-toptab{padding:6px 14px;border-radius:20px;border:1px solid transparent;background:var(--bg3);color:var(--text2);cursor:pointer;font-size:12px;transition:all .15s;}
 .kn-toptab.active{border-color:var(--accent);color:#fff;background:var(--bg3);}
 .kn-search{background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:7px 12px;font-size:12px;color:var(--text);outline:none;width:220px;}
 .kn-search:focus{border-color:var(--accent);}
-.kn-row{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:grid;grid-template-columns:auto 1.5fr 1fr .7fr 1fr auto;gap:10px;align-items:center;margin-bottom:8px;cursor:pointer;}
+.kn-row{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:grid;grid-template-columns:auto 1.5fr 1fr .7fr 1fr auto 1.2fr;gap:10px;align-items:center;margin-bottom:8px;cursor:pointer;}
 .kn-selectall-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-size:12px;color:var(--text2);gap:10px;flex-wrap:wrap;}
 .kn-bulkbar{display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--accent);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--text);}
+.kn-row>*{min-width:0;}
 .kn-row:hover{border-color:var(--border2);}
 .kn-row.kn-overdue{background:var(--red-bg);border-color:var(--red);}
 .kn-row.kn-overdue .kn-name,.kn-row.kn-overdue .kn-sub{color:#fff;}
@@ -241,7 +242,9 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .kn-val{font-size:12px;color:var(--text);}
 .kn-pl{background:var(--bg4);color:var(--text);font-size:11px;padding:3px 8px;border-radius:20px;text-align:center;}
 .kn-flags{display:flex;gap:6px;}
-.kn-flag{width:24px;height:24px;border-radius:5px;border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:10px;font-weight:700;cursor:pointer;transition:all .15s;background:transparent;}
+.kn-bem{font-size:11px;color:var(--text3);line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;}
+.kn-row.kn-overdue .kn-bem{color:rgba(255,255,255,.8);}
+.kn-flag{width:24px;height:24px;flex:0 0 auto;border-radius:5px;border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:10px;font-weight:700;cursor:pointer;transition:all .15s;background:transparent;}
 .kn-flag:hover{border-color:var(--text2);}
 .kn-flag.on-m{background:var(--yellow-bg);color:var(--yellow);border-color:var(--yellow);}
 .kn-flag.on-done{background:var(--green-bg);color:var(--green);border-color:var(--green);}
@@ -882,6 +885,7 @@ function renderKnList(){
         <div class="kn-flag${k.verrechnet?' on-rg':''}" title="Verrechnet" onclick="knToggleFlag('${id}','verrechnet')">RG</div>
         <div class="kn-flag${k.rgk?' on-rgk':''}" title="Rechnung Swisselko weiterverrechnet" onclick="knToggleFlag('${id}','rgk')">RGK</div>
       </div>
+      <div class="kn-bem" title="${escHtml(k.bemerkungen)}">${escHtml(k.bemerkungen)}</div>
     </div>`;
   }).join('');
   renderKnBulkBar();
