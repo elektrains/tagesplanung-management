@@ -259,6 +259,13 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .kn-file-link:hover{text-decoration:underline;}
 .kn-file-empty{font-size:11px;color:var(--text3);}
 .kn-file-status{font-size:11px;color:var(--text3);}
+.kn-file-slot{padding:8px 0;border-bottom:1px solid var(--border);}
+.kn-file-slot:last-child{border-bottom:none;}
+.kn-file-list{display:flex;flex-direction:column;margin:2px 0 6px;}
+.kn-file-list .kn-file-row{padding:2px 0;}
+.kn-drop{border:1px dashed var(--border2);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--text3);text-align:center;cursor:pointer;transition:all .15s;}
+.kn-drop:hover{border-color:var(--text2);color:var(--text2);}
+.kn-drop.drag{border-color:var(--accent);color:var(--accent);background:var(--bg3);}
 /* Loader */
 .loader{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:9999;}
 .loader-logo{height:60px;}
@@ -976,38 +983,82 @@ function knToggleVersendetAndere(){
 
 const KN_FILE_LABELS={aufgebot:'Aufgebot',maengelliste:'Mängelliste',rechnung:'Rechnung Kontrolleur'};
 
-function knFileSlotHtml(id,slot,fileObj){
-  return `<div class="kn-file-row" id="knFileSlot_${slot}">
-    <span class="kn-file-label">${KN_FILE_LABELS[slot]}</span>
-    ${fileObj?`<a href="${fileObj.url}" target="_blank" rel="noopener" class="kn-file-link">📄 ${escHtml(fileObj.name)}</a><button type="button" class="btn-sm danger" onclick="knDeleteFile('${id}','${slot}')">Entfernen</button>`:`<span class="kn-file-empty">Keine Datei</span>`}
-    <input type="file" id="knFileInput_${slot}" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="knUploadFile('${id}','${slot}',this)">
-    <button type="button" class="btn-sm" onclick="document.getElementById('knFileInput_${slot}').click()">${fileObj?'Ersetzen':'Hochladen'}</button>
+// Dateien eines Slots als [fid,fileObj]-Paare. Altes Einzeldatei-Format hat die fid ''.
+function knSlotFiles(k,slot){
+  const v=k?.files?.[slot];
+  if(!v)return[];
+  if(typeof v.url==='string')return[['',v]];
+  return Object.entries(v).filter(([,f])=>f&&f.url).sort((a,b)=>(a[1].uploadedAt||0)-(b[1].uploadedAt||0));
+}
+
+function knFileSlotHtml(id,slot,k){
+  const rows=knSlotFiles(k,slot).map(([fid,f])=>`<div class="kn-file-row">
+    <a href="${f.url}" target="_blank" rel="noopener" class="kn-file-link">📄 ${escHtml(f.name)}</a>
+    <button type="button" class="btn-sm danger" onclick="knDeleteFile('${id}','${slot}','${fid}')">Entfernen</button>
+  </div>`).join('');
+  return `<div class="kn-file-slot" id="knFileSlot_${slot}">
+    <div class="kn-file-label">${KN_FILE_LABELS[slot]}</div>
+    <div class="kn-file-list">${rows||'<div class="kn-file-empty">Keine Datei</div>'}</div>
+    <div class="kn-drop" ondragover="knDragOver(event,this)" ondragleave="knDragLeave(event,this)" ondrop="knDrop(event,this,'${id}','${slot}')" onclick="document.getElementById('knFileInput_${slot}').click()">Dateien hierher ziehen oder klicken zum Auswählen</div>
+    <input type="file" id="knFileInput_${slot}" style="display:none" multiple accept=".pdf,.jpg,.jpeg,.png" onchange="knUploadFiles('${id}','${slot}',this.files);this.value='';">
   </div>`;
 }
+
+function knRenderSlot(id,slot){
+  const w=document.getElementById('knFileSlot_'+slot);
+  if(w)w.outerHTML=knFileSlotHtml(id,slot,state.kontrollen[id]);
+}
+
+function knDragOver(e,el){e.preventDefault();e.stopPropagation();el.classList.add('drag');}
+function knDragLeave(e,el){e.preventDefault();e.stopPropagation();el.classList.remove('drag');}
+function knDrop(e,el,id,slot){e.preventDefault();e.stopPropagation();el.classList.remove('drag');knUploadFiles(id,slot,e.dataTransfer?.files);}
+
+// Verhindert, dass der Browser danebengelegte Dateien öffnet und die App verlässt
+window.addEventListener('dragover',e=>e.preventDefault());
+window.addEventListener('drop',e=>e.preventDefault());
 
 function knUploadFileObj(id,slot,file){
   const path='kontrollen/'+id+'/'+slot+'_'+Date.now()+'_'+file.name;
   return storage.ref(path).put(file).then(snap=>snap.ref.getDownloadURL()).then(url=>{
+    const fid='f'+Date.now()+Math.floor(Math.random()*1000);
     const fileObj={name:file.name,url,path,uploadedAt:Date.now()};
+    const cur=state.kontrollen?.[id]?.files?.[slot];
+    const legacy=cur&&typeof cur.url==='string';
     const updates={};
-    updates['files/'+slot]=fileObj;
-    if(slot==='maengelliste')updates.maengellisteErhaltenAm=dateKey(new Date());
-    return db.ref('kontrollen/'+id).update(updates).then(()=>fileObj);
+    // Altbestand (eine Datei direkt unter files/slot) beim ersten Zusatz-Upload umziehen
+    if(legacy)updates['files/'+slot]={['f0'+(cur.uploadedAt||0)]:cur,[fid]:fileObj};
+    else updates['files/'+slot+'/'+fid]=fileObj;
+    if(slot==='maengelliste'&&!state.kontrollen?.[id]?.maengellisteErhaltenAm)updates.maengellisteErhaltenAm=dateKey(new Date());
+    return db.ref('kontrollen/'+id).update(updates).then(()=>{
+      const e=state.kontrollen[id]=state.kontrollen[id]||{};
+      e.files=e.files||{};
+      if(legacy)e.files[slot]=updates['files/'+slot];
+      else{if(!e.files[slot]||typeof e.files[slot].url==='string')e.files[slot]={};e.files[slot][fid]=fileObj;}
+      if(updates.maengellisteErhaltenAm)e.maengellisteErhaltenAm=updates.maengellisteErhaltenAm;
+      return fileObj;
+    });
   });
 }
 
-function knUploadFile(id,slot,inputEl){
-  const file=inputEl.files[0];if(!file)return;
-  const wrap=document.getElementById('knFileSlot_'+slot);
-  if(wrap) wrap.insertAdjacentHTML('beforeend','<span class="kn-file-status">Lädt hoch…</span>');
-  knUploadFileObj(id,slot,file).then(fileObj=>{
-    if(!state.kontrollen[id])state.kontrollen[id]={};
-    if(!state.kontrollen[id].files)state.kontrollen[id].files={};
-    state.kontrollen[id].files[slot]=fileObj;
-    const w=document.getElementById('knFileSlot_'+slot);
-    if(w)w.outerHTML=knFileSlotHtml(id,slot,fileObj);
-    showToast('✓ Datei hochgeladen','success');
-  }).catch(e=>{showToast('Fehler: '+e.message,'error');document.getElementById('knFileSlot_'+slot)?.querySelector('.kn-file-status')?.remove();});
+function knUploadFiles(id,slot,fileList){
+  const queue=Array.from(fileList||[]);if(!queue.length)return;
+  const total=queue.length;
+  const status=document.createElement('div');
+  status.className='kn-file-status';
+  document.getElementById('knFileSlot_'+slot)?.appendChild(status);
+  let done=0;
+  const next=()=>{
+    if(!queue.length){
+      status.remove();knRenderSlot(id,slot);
+      showToast(done===1?'✓ Datei hochgeladen':'✓ '+done+' Dateien hochgeladen','success');
+      return;
+    }
+    const f=queue.shift();
+    status.textContent='Lädt hoch: '+f.name+' ('+(done+1)+'/'+total+')';
+    knUploadFileObj(id,slot,f).then(()=>{done++;next();})
+      .catch(e=>{status.remove();knRenderSlot(id,slot);showToast('Fehler: '+e.message,'error');});
+  };
+  next();
 }
 
 // ===== KI-EXTRAKTION =====
@@ -1047,13 +1098,7 @@ function openKnExtractedModal(data){
     const pendingFile=knExtractPending?.file;
     const slot=knSlotForDocType(docType);
     db.ref('kontrollen/'+id).set({...formData,createdAt:Date.now()}).then(()=>{
-      if(pendingFile&&slot){
-        knUploadFileObj(id,slot,pendingFile).then(fileObj=>{
-          if(!state.kontrollen[id])state.kontrollen[id]={};
-          if(!state.kontrollen[id].files)state.kontrollen[id].files={};
-          state.kontrollen[id].files[slot]=fileObj;
-        }).catch(()=>{});
-      }
+      if(pendingFile&&slot)knUploadFileObj(id,slot,pendingFile).catch(()=>{});
     }).catch(e=>showToast('Fehler: '+e.message,'error'));
     knExtractPending=null;
     closeModal();
@@ -1062,14 +1107,15 @@ function openKnExtractedModal(data){
   setTimeout(()=>document.getElementById('knName')?.focus(),50);
 }
 
-function knDeleteFile(id,slot){
+function knDeleteFile(id,slot,fid){
   if(!confirm('Datei entfernen?'))return;
-  const f=state.kontrollen[id]?.files?.[slot];
+  const legacy=!fid;
+  const f=legacy?state.kontrollen[id]?.files?.[slot]:state.kontrollen[id]?.files?.[slot]?.[fid];
   const cleanup=()=>{
-    db.ref('kontrollen/'+id+'/files/'+slot).remove().then(()=>{
-      if(state.kontrollen[id]?.files)delete state.kontrollen[id].files[slot];
-      const w=document.getElementById('knFileSlot_'+slot);
-      if(w)w.outerHTML=knFileSlotHtml(id,slot,null);
+    db.ref('kontrollen/'+id+'/files/'+slot+(legacy?'':'/'+fid)).remove().then(()=>{
+      const files=state.kontrollen[id]?.files;
+      if(files){if(legacy)delete files[slot];else if(files[slot])delete files[slot][fid];}
+      knRenderSlot(id,slot);
       showToast('Datei entfernt','success');
     }).catch(e=>showToast('Fehler: '+e.message,'error'));
   };
@@ -1080,9 +1126,9 @@ function knFormContent(k,id){
   k=k||{};
   const fileSection=id?`<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
     <div class="kn-form-label" style="margin-top:0">Dokumente</div>
-    ${knFileSlotHtml(id,'aufgebot',k.files?.aufgebot)}
-    ${knFileSlotHtml(id,'maengelliste',k.files?.maengelliste)}
-    ${knFileSlotHtml(id,'rechnung',k.files?.rechnung)}
+    ${knFileSlotHtml(id,'aufgebot',k)}
+    ${knFileSlotHtml(id,'maengelliste',k)}
+    ${knFileSlotHtml(id,'rechnung',k)}
   </div>`:`<div style="margin-top:12px;font-size:11px;color:var(--text3)">Dokumente können nach dem Erstellen hochgeladen werden.</div>`;
   return `
   <div class="kn-form-grid">
@@ -1161,7 +1207,7 @@ function editKontrolle(id){
     closeModal();
   };
   const del=()=>{
-    Object.values(k.files||{}).forEach(f=>{if(f?.path)storage.ref(f.path).delete().catch(()=>{});});
+    Object.keys(k.files||{}).forEach(slot=>knSlotFiles(k,slot).forEach(([,f])=>{if(f?.path)storage.ref(f.path).delete().catch(()=>{});}));
     db.ref('kontrollen/'+id).remove().catch(e=>showToast('Fehler: '+e.message,'error'));
     closeModal();
   };
