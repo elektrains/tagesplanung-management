@@ -1,15 +1,7 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
-const { onSchedule } = require('firebase-functions/v2/scheduler');
-const logger = require('firebase-functions/logger');
 const { defineSecret } = require('firebase-functions/params');
 const Anthropic = require('@anthropic-ai/sdk');
 const { google } = require('googleapis');
-const admin = require('firebase-admin');
-const tagesplan = require('./tagesplan');
-
-admin.initializeApp({
-  databaseURL: 'https://elektra-tagesplanung-23b62-default-rtdb.europe-west1.firebasedatabase.app'
-});
 
 const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 
@@ -125,8 +117,18 @@ function klassifiziere(ev) {
   return { art: 'einsatz' };
 }
 
-// Liest die Kalender im Zeitraum und liefert je Tag und Mitarbeiter Status und Einsätze.
-async function kalenderLesen(kalender, von, bis) {
+exports.syncKalender = onCall({ cors: true, serviceAccount: KALENDER_SA, timeoutSeconds: 180 }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Login erforderlich.');
+  }
+  const { von, bis, kalender } = request.data || {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(von || '') || !/^\d{4}-\d{2}-\d{2}$/.test(bis || '')) {
+    throw new HttpsError('invalid-argument', 'Zeitraum fehlt oder ist ungültig.');
+  }
+  if (!kalender || typeof kalender !== 'object' || !Object.keys(kalender).length) {
+    throw new HttpsError('failed-precondition', 'Keine Kalender zugeordnet. Bitte zuerst in den Einstellungen eintragen.');
+  }
+
   // Grosszügiger Rand, damit die Sommerzeit-Umstellung keine Rolle spielt —
   // exakt gefiltert wird danach über den Zürcher Tagesschlüssel.
   const timeMin = new Date(von + 'T00:00:00Z');
@@ -201,124 +203,4 @@ async function kalenderLesen(kalender, von, bis) {
   }
 
   return { tage, fehler };
-}
-
-// Tagesschlüssel eines Zeitraums, Wochenenden übersprungen
-function tageImBereich(von, bis, mitWochenende) {
-  const liste = [];
-  const d = new Date(von + 'T00:00:00Z');
-  const ende = new Date(bis + 'T00:00:00Z');
-  while (d <= ende && liste.length < 120) {
-    const wt = d.getUTCDay();
-    if (mitWochenende || (wt !== 0 && wt !== 6)) liste.push(d.toISOString().slice(0, 10));
-    d.setUTCDate(d.getUTCDate() + 1);
-  }
-  return liste;
-}
-
-function planVon(plans, tag) {
-  const p = plans[tag];
-  return p ? JSON.parse(JSON.stringify(p)) : { sites: [], globalStatus: {} };
-}
-
-async function einstellungenUndPlaene() {
-  const db = admin.database();
-  const [sSnap, pSnap] = await Promise.all([db.ref('settings').get(), db.ref('plans').get()]);
-  const settings = sSnap.val() || {};
-  return {
-    plans: pSnap.val() || {},
-    employees: settings.employees || [],
-    statusOnly: settings.kalenderStatusOnly || [],
-    kalender: settings.kalender || {}
-  };
-}
-
-// Liefert je Tag die fertigen Vorschläge. Schreibt nichts.
-exports.syncKalender = onCall({ cors: true, serviceAccount: KALENDER_SA, timeoutSeconds: 180 }, async (request) => {
-  if (!request.auth) throw new HttpsError('unauthenticated', 'Login erforderlich.');
-  const { von, bis } = request.data || {};
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(von || '') || !/^\d{4}-\d{2}-\d{2}$/.test(bis || '')) {
-    throw new HttpsError('invalid-argument', 'Zeitraum fehlt oder ist ungültig.');
-  }
-
-  const cfg = await einstellungenUndPlaene();
-  if (!Object.keys(cfg.kalender).length) {
-    throw new HttpsError('failed-precondition', 'Keine Kalender zugeordnet. Bitte zuerst in den Einstellungen eintragen.');
-  }
-
-  const roh = await kalenderLesen(cfg.kalender, von, bis);
-  const tage = {};
-  tageImBereich(von, bis, true).forEach((tag) => {
-    const vorschlaege = tagesplan.vorschlaegeBauen({
-      tagesDaten: roh.tage[tag] || {},
-      plan: planVon(cfg.plans, tag),
-      employees: cfg.employees,
-      statusOnly: cfg.statusOnly,
-      plans: cfg.plans
-    });
-    tage[tag] = { vorschlaege };
-  });
-  return { tage, fehler: roh.fehler };
-});
-
-// Übernimmt die vom Benutzer angehakten Vorschläge in einen Tag.
-exports.uebernehmeVorschlaege = onCall({ cors: true, serviceAccount: KALENDER_SA, timeoutSeconds: 120 }, async (request) => {
-  if (!request.auth) throw new HttpsError('unauthenticated', 'Login erforderlich.');
-  const { datum, vorschlaege } = request.data || {};
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(datum || '')) throw new HttpsError('invalid-argument', 'Datum fehlt.');
-  if (!Array.isArray(vorschlaege) || !vorschlaege.length) return { uebernommen: 0 };
-
-  const cfg = await einstellungenUndPlaene();
-  const erlaubt = new Set(['X', 'X1', 'X2']);
-  const gueltig = vorschlaege.filter((v) => {
-    if (!v || (v.typ !== 'status' && v.typ !== 'einsatz')) return false;
-    if (v.typ === 'status') return cfg.employees.indexOf(v.emp) >= 0 && ['absent', 'school', 'half', ''].indexOf(v.wert) >= 0;
-    return Object.keys(v.zuteilung || {}).every((e) => cfg.employees.indexOf(e) >= 0 && erlaubt.has(v.zuteilung[e]));
-  });
-  if (!gueltig.length) throw new HttpsError('invalid-argument', 'Keine gültigen Vorschläge.');
-
-  const plan = planVon(cfg.plans, datum);
-  gueltig.forEach((v) => tagesplan.vorschlagAnwenden(v, plan));
-  tagesplan.eigeneZeilenErgaenzen(plan, cfg.employees, cfg.plans);
-  tagesplan.sortiereZeilen(plan, cfg.employees, cfg.plans);
-  await admin.database().ref('plans/' + datum).set(plan);
-  return { uebernommen: gueltig.length };
-});
-
-// Füllt nachts die Tage, die noch völlig leer sind. Angefasste Tage bleiben unberührt.
-exports.nachtlaufKalender = onSchedule({
-  schedule: '0 4 * * *', timeZone: ZEITZONE, serviceAccount: KALENDER_SA, timeoutSeconds: 540
-}, async () => {
-  const cfg = await einstellungenUndPlaene();
-  if (!Object.keys(cfg.kalender).length) {
-    logger.info('Nachtlauf übersprungen: keine Kalender zugeordnet.');
-    return;
-  }
-  const heute = TAG_FMT.format(new Date());
-  const b = new Date(heute + 'T00:00:00Z');
-  b.setUTCDate(b.getUTCDate() + 13);
-  const bis = b.toISOString().slice(0, 10);
-
-  const roh = await kalenderLesen(cfg.kalender, heute, bis);
-  const db = admin.database();
-  const gefuellt = [];
-  for (const tag of tageImBereich(heute, bis, false)) {
-    const plan = planVon(cfg.plans, tag);
-    if (!tagesplan.istLeer(plan)) continue;
-    const vorschlaege = tagesplan.vorschlaegeBauen({
-      tagesDaten: roh.tage[tag] || {},
-      plan,
-      employees: cfg.employees,
-      statusOnly: cfg.statusOnly,
-      plans: cfg.plans
-    });
-    if (!vorschlaege.length) continue;
-    vorschlaege.forEach((v) => tagesplan.vorschlagAnwenden(v, plan));
-    tagesplan.eigeneZeilenErgaenzen(plan, cfg.employees, cfg.plans);
-    tagesplan.sortiereZeilen(plan, cfg.employees, cfg.plans);
-    await db.ref('plans/' + tag).set(plan);
-    gefuellt.push(tag + ' (' + vorschlaege.length + ')');
-  }
-  logger.info('Nachtlauf fertig. Gefüllt: ' + (gefuellt.join(', ') || 'nichts') +
-    (roh.fehler.length ? ' | Nicht gelesen: ' + roh.fehler.map((f) => f.mitarbeiter).join(', ') : ''));
 });

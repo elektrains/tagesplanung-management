@@ -1604,15 +1604,160 @@ function knKalenderVorbelegen(){
   showToast(n?'✓ '+n+' Kalender eingetragen':'Alle bereits eingetragen','success');
 }
 
+// --- Baustellennamen erkennen ---
+const KN_STOPP=new Set(['und','mit','der','die','das','den','dem','ins','in','im','am','an','auf','bei','für','von','vom','zum','zur','neue','neuer','neues','div','diverse','std','ca','herr','frau']);
+function knTokens(s){
+  return (s||'').toLowerCase().replace(/[.,;:/()\[\]{}"'`–—+-]+/g,' ').split(/\s+/)
+    .filter(w=>w.length>=3&&!KN_STOPP.has(w));
+}
+// Baustellennamen, die in den letzten Plänen tatsächlich vorkamen
+function knBekannteBaustellen(){
+  const zaehler={};
+  knPlanTage().slice(-60).forEach(k=>{
+    ((state.plans[k]||{}).sites||[]).forEach(s=>{
+      const n=(s.name||'').trim();
+      if(n)zaehler[n]=(zaehler[n]||0)+1;
+    });
+  });
+  return Object.keys(zaehler).sort((a,b)=>zaehler[b]-zaehler[a]);
+}
+// "Apparatemontage und Leuchten Traube" -> "Traube", "St. Johannsen - GSA" -> "St. Johannsen"
+function knBaustelleAusTitel(titel,bekannt){
+  const tk=new Set(knTokens(titel));
+  let best=null,bestTreffer=0,bestScore=0;
+  bekannt.forEach(name=>{
+    const nk=knTokens(name);
+    if(!nk.length||!tk.size)return;
+    const treffer=nk.filter(w=>tk.has(w)).length;
+    if(!treffer)return;
+    const score=treffer/Math.min(nk.length,tk.size);
+    if(score>bestScore||(score===bestScore&&treffer>bestTreffer)){bestScore=score;bestTreffer=treffer;best=name;}
+  });
+  if(best&&bestScore>=0.6)return best;
+  const vorDemStrich=titel.split(/\s[–—-]\s/)[0].trim();
+  return vorDemStrich||titel.trim();
+}
+// In welchem Fahrzeug sitzt der Mitarbeiter üblicherweise?
+// Nur Tage mit echtem Inhalt – sonst verdrängen leere Tage die Historie
+function knPlanTage(){
+  return Object.keys(state.plans||{}).filter(k=>(((state.plans[k]||{}).sites)||[]).length).sort();
+}
+function knStammFahrzeug(emp){
+  const zaehler={};
+  knPlanTage().slice(-40).forEach(k=>{
+    ((state.plans[k]||{}).sites||[]).forEach(s=>{
+      if(s.vehicle&&s.assignments&&s.assignments[emp])zaehler[s.vehicle]=(zaehler[s.vehicle]||0)+1;
+    });
+  });
+  const beste=Object.keys(zaehler).sort((a,b)=>zaehler[b]-zaehler[a])[0];
+  return beste?Number(beste):null;
+}
+
+function knVorschlaegeBauen(tagesDaten,datum){
+  const plan=getDayPlan(datum||state.selectedDate);
+  const bekannt=knBekannteBaustellen();
+  const nurStatus=state.kalenderStatusOnly||[];
+  const sites=plan.sites||[];
+  const v=[];
+  const gruppen={};
+  Object.keys(tagesDaten||{}).forEach(emp=>{
+    const d=tagesDaten[emp]||{};
+    const jetzt=(plan.globalStatus||{})[emp]||'';
+    if(d.status&&d.status!==jetzt){
+      v.push({typ:'status',emp,wert:d.status,rang:knEmpRang(emp),
+        text:emp+' → '+KN_STATUS_TEXT[d.status]+' (bisher '+(KN_STATUS_TEXT[jetzt]||jetzt)+')'});
+    }
+    if(nurStatus.includes(emp))return;
+    if(!d.einsaetze||!d.einsaetze.length)return;
+    let namen=[];
+    d.einsaetze.forEach(e=>{const n=knBaustelleAusTitel(e.titel,bekannt);if(n&&namen.indexOf(n)<0)namen.push(n);});
+    // "Tertianum" neben "Tertianum/Schulhaus Gampelen" – der längere Name gewinnt
+    namen=namen.filter(a=>!namen.some(b=>b!==a&&b.toLowerCase().indexOf(a.toLowerCase())>=0));
+    if(!namen.length)return;
+    // Dieselbe Baustelle ergibt EINE Zeile mit mehreren X, nicht eine Zeile pro Mann
+    const name=namen.join('/');
+    (gruppen[name]=gruppen[name]||{})[emp]=d.haelfte||'X';
+  });
+
+  Object.keys(gruppen).forEach(name=>{
+    const zuteilung=gruppen[name];
+    const emps=Object.keys(zuteilung).sort((a,b)=>knEmpRang(a)-knEmpRang(b));
+    const gleich=s=>(s.name||'').trim().toLowerCase()===name.toLowerCase();
+    // 1. Zeile mit diesem Namen  2. Zeile, auf der der Monteur schon steht  3. sein Stammfahrzeug
+    let idx=sites.findIndex(gleich);
+    if(idx<0)idx=sites.findIndex(s=>emps.some(e=>(s.assignments||{})[e]));
+    const fahrzeug=knStammFahrzeug(emps[0]);
+    if(idx<0&&fahrzeug!=null)idx=sites.findIndex(s=>s.vehicle===fahrzeug&&!(s.name||'').trim());
+    // Steht schon alles richtig? Dann nichts vorschlagen.
+    if(idx>=0&&gleich(sites[idx])&&emps.every(e=>(sites[idx].assignments||{})[e]===zuteilung[e]))return;
+    const alterName=idx>=0?(sites[idx].name||'').trim():'';
+    const zusatz=idx<0?' — neue Zeile'
+      :(alterName&&alterName.toLowerCase()!==name.toLowerCase()?' (statt „'+alterName+'“)':'');
+    const wer=emps.map(e=>e+(zuteilung[e]!=='X'?' ['+zuteilung[e]+']':'')).join(', ');
+    v.push({typ:'einsatz',name,zuteilung,siteIdx:idx<0?null:idx,fahrzeug,rang:knEmpRang(emps[0]),
+      text:wer+' → '+name+zusatz});
+  });
+  KN_IMMER_ABWESEND.forEach(emp=>{
+    if((state.employees||[]).indexOf(emp)<0)return;
+    if(((plan.globalStatus||{})[emp]||'')==='absent')return;
+    v.push({typ:'status',emp,wert:'absent',rang:knEmpRang(emp),text:emp+' → Abwesend'});
+  });
+  v.sort((a,b)=>a.rang-b.rang);
+  return v;
+}
+
+// Welcher Mitarbeiter "gehört" zu welchem Fahrzeug – aus den bisherigen Plänen gelernt
+function knFahrzeugBesitzer(){
+  const m={};
+  (state.employees||[]).forEach(e=>{
+    const fz=knStammFahrzeug(e);
+    if(fz!=null&&m[fz]===undefined)m[fz]=knEmpRang(e);
+  });
+  return m;
+}
+
+// Jeder mit eigenem Fahrzeug bekommt seine eigene Zeile – auch wenn er heute bei
+// jemand anderem mitfährt. Sie bleibt dann namenlos und ist schnell umzudisponieren.
+function knEigeneZeilenErgaenzen(plan){
+  plan.sites=plan.sites||[];
+  knAktiveMitarbeiter().forEach(emp=>{
+    const fz=knStammFahrzeug(emp);
+    if(fz==null)return;
+    if(plan.sites.some(s=>s.vehicle===fz))return;
+    plan.sites.push({id:'s'+Date.now()+Math.random(),name:'',vehicle:fz,assignments:{}});
+  });
+}
+
+function knEmpRang(emp){const i=(state.employees||[]).indexOf(emp);return i<0?9998:i;}
+
+// Zeilen so ordnen, dass die X von links nach rechts treppenartig nach unten laufen
+function knSortiereZeilen(plan){
+  const besitzer=knFahrzeugBesitzer();
+  const rang=s=>{
+    const zu=s.assignments||{};
+    const emps=Object.keys(zu).filter(e=>zu[e]);
+    if(emps.length)return Math.min.apply(null,emps.map(knEmpRang));
+    // Leere Zeile: nach dem Mann einordnen, dessen Fahrzeug sie ist
+    if(s.vehicle!=null&&besitzer[s.vehicle]!==undefined)return besitzer[s.vehicle];
+    return 9999;
+  };
+  plan.sites=(plan.sites||[]).map((s,i)=>({s,i,r:rang(s)}))
+    .sort((a,b)=>a.r-b.r||a.i-b.i).map(x=>x.s);
+}
+
 let knVorschlagListe=[];
 function knKalenderVorschlaege(){
+  const kal=knKalenderIds();
+  if(!Object.keys(kal).length){
+    showToast('Keine Kalender zugeordnet – siehe Einstellungen','error');return;
+  }
   knAusPruefung=false;
   const tag=dateKey(state.selectedDate);
   showToast('Kalender werden gelesen…','success');
-  functions.httpsCallable('syncKalender')({von:tag,bis:tag})
+  functions.httpsCallable('syncKalender')({von:tag,bis:tag,kalender:kal})
     .then(res=>{
       const daten=res.data||{};
-      knZeigeVorschlaege(((daten.tage||{})[tag]||{}).vorschlaege||[],daten.fehler||[]);
+      knZeigeVorschlaege(knVorschlaegeBauen((daten.tage||{})[tag]||{}),daten.fehler||[]);
     })
     .catch(e=>showToast('Fehler: '+(e.message||e),'error'));
 }
@@ -1637,39 +1782,48 @@ function knZeigeVorschlaege(liste,fehler){
     actions:[{label:'Abbrechen',cancel:true},{label:'Übernehmen',action:knVorschlaegeUebernehmen}]});
 }
 
+function knVorschlagAnwenden(v,plan){
+  if(v.typ==='status'){plan.globalStatus=plan.globalStatus||{};plan.globalStatus[v.emp]=v.wert;return;}
+  plan.sites=plan.sites||[];
+  let site=v.siteIdx!=null?plan.sites[v.siteIdx]:null;
+  if(!site){site={id:'s'+Date.now()+Math.random(),name:'',vehicle:v.fahrzeug||null,assignments:{}};plan.sites.push(site);}
+  site.name=v.name;
+  site.assignments=site.assignments||{};
+  Object.keys(v.zuteilung).forEach(e=>{site.assignments[e]=v.zuteilung[e];});
+}
+
 function knVorschlaegeUebernehmen(){
-  const gewaehlt=[];
+  const plan=getDayPlan(state.selectedDate);
+  let n=0;
   document.querySelectorAll('#modalBox input[data-vi]').forEach(cb=>{
-    if(cb.checked)gewaehlt.push(knVorschlagListe[Number(cb.dataset.vi)]);
+    if(!cb.checked)return;
+    knVorschlagAnwenden(knVorschlagListe[Number(cb.dataset.vi)],plan);n++;
   });
   const k=dateKey(state.selectedDate);
+  if(n){knEigeneZeilenErgaenzen(plan);knSortiereZeilen(plan);state.plans[k]=plan;fbWrite('plans/'+k,plan,100);renderPlanView();}
   closeModal();
-  if(!gewaehlt.length){
-    showToast('Nichts übernommen','success');
-    if(knAusPruefung)knZeigePruefung();
-    return;
-  }
-  showToast('Wird übernommen…','success');
-  functions.httpsCallable('uebernehmeVorschlaege')({datum:k,vorschlaege:gewaehlt})
-    .then(res=>{
-      showToast('✓ '+((res.data||{}).uebernommen||0)+' übernommen','success');
-      // Erledigte Vorschläge aus der Übersicht nehmen, damit die Zählung stimmt
-      const d=knPruefDaten&&knPruefDaten[k];
-      if(d&&d.vorschlaege)d.vorschlaege=d.vorschlaege.filter(v=>gewaehlt.indexOf(v)<0);
-      if(knAusPruefung)knZeigePruefung();
-    })
-    .catch(e=>showToast('Fehler: '+(e.message||e),'error'));
+  showToast(n?'✓ '+n+' übernommen':'Nichts übernommen','success');
+  // Aus der 14-Tage-Prüfung gekommen? Dann zurück in die Übersicht, neu gezählt.
+  if(knAusPruefung)knZeigePruefung();
 }
 
 // --- Abweichungen über mehrere Tage finden ---
 let knPruefDaten=null,knPruefBereich=null,knAusPruefung=false;
 
+function knKalenderIds(){
+  const kal={};
+  Object.keys(state.kalender||{}).forEach(e=>{if(state.kalender[e])kal[e]=state.kalender[e];});
+  return kal;
+}
+
 function knPruefeZeitraum(){
+  const kal=knKalenderIds();
+  if(!Object.keys(kal).length){showToast('Keine Kalender zugeordnet – siehe Einstellungen','error');return;}
   const von=dateKey(state.selectedDate);
   const b=new Date(state.selectedDate);b.setDate(b.getDate()+13);
   const bis=dateKey(b);
   showToast('Prüfe 14 Tage…','success');
-  functions.httpsCallable('syncKalender')({von,bis})
+  functions.httpsCallable('syncKalender')({von,bis,kalender:kal})
     .then(res=>{
       const daten=res.data||{};
       knPruefDaten=daten.tage||{};
@@ -1687,7 +1841,7 @@ function knZeigePruefung(){
   const d=new Date(von+'T00:00:00'),ende=new Date(bis+'T00:00:00');
   while(d<=ende){
     const k=dateKey(d);
-    const anzahl=((knPruefDaten[k]||{}).vorschlaege||[]).length;
+    const anzahl=knVorschlaegeBauen(knPruefDaten[k]||{},new Date(d)).length;
     // Wochenenden nur zeigen, wenn dort tatsächlich etwas ansteht
     if(d.getDay()!==0&&d.getDay()!==6||anzahl){
       geprueft++;if(anzahl)mit++;
@@ -1714,7 +1868,7 @@ function knPruefTagOeffnen(k){
   state.currentDate=new Date(t[0],t[1]-1,1);
   render();
   knAusPruefung=true;
-  knZeigeVorschlaege((knPruefDaten[k]||{}).vorschlaege||[],[]);
+  knZeigeVorschlaege(knVorschlaegeBauen(knPruefDaten[k]||{},state.selectedDate),[]);
 }
 
 // ===== MODAL / CTX =====
