@@ -272,6 +272,13 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .kn-vorschlag{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);cursor:pointer;}
 .kn-vorschlag:last-child{border-bottom:none;}
 .kn-vorschlag:hover{background:var(--bg3);}
+.kn-pruef-tag{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 8px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);cursor:pointer;border-radius:4px;}
+.kn-pruef-tag:last-child{border-bottom:none;}
+.kn-pruef-tag:hover{background:var(--bg3);}
+.kn-pruef-tag .kn-pruef-anzahl{font-size:11px;color:var(--accent);font-weight:600;white-space:nowrap;}
+.kn-pruef-tag.leer{color:var(--text3);cursor:default;}
+.kn-pruef-tag.leer:hover{background:transparent;}
+.kn-pruef-tag.leer .kn-pruef-anzahl{color:var(--text3);font-weight:400;}
 /* Loader */
 .loader{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:9999;}
 .loader-logo{height:60px;}
@@ -695,6 +702,7 @@ function renderPlanView(){
         <button class="action-btn" onclick="saveAsTemplate()">💾 Als Vorlage speichern</button>
         <button class="action-btn" onclick="applyTemplate()">📄 Vorlage anwenden</button>
         <button class="action-btn" onclick="knKalenderVorschlaege()">📅 Aus Kalender</button>
+        <button class="action-btn" onclick="knPruefeZeitraum()">🔍 14 Tage prüfen</button>
         <button class="action-btn" onclick="copyPrevDay()">📋 Vortag kopieren</button>
         <button class="action-btn" onclick="clearDay()">🗑 Tag leeren</button>
         <button class="action-btn primary" onclick="addSite()">+ Baustelle</button>
@@ -1603,7 +1611,7 @@ function knTokens(s){
 // Baustellennamen, die in den letzten Plänen tatsächlich vorkamen
 function knBekannteBaustellen(){
   const zaehler={};
-  Object.keys(state.plans||{}).sort().slice(-60).forEach(k=>{
+  knPlanTage().slice(-60).forEach(k=>{
     ((state.plans[k]||{}).sites||[]).forEach(s=>{
       const n=(s.name||'').trim();
       if(n)zaehler[n]=(zaehler[n]||0)+1;
@@ -1628,9 +1636,13 @@ function knBaustelleAusTitel(titel,bekannt){
   return vorDemStrich||titel.trim();
 }
 // In welchem Fahrzeug sitzt der Mitarbeiter üblicherweise?
+// Nur Tage mit echtem Inhalt – sonst verdrängen leere Tage die Historie
+function knPlanTage(){
+  return Object.keys(state.plans||{}).filter(k=>(((state.plans[k]||{}).sites)||[]).length).sort();
+}
 function knStammFahrzeug(emp){
   const zaehler={};
-  Object.keys(state.plans||{}).sort().slice(-40).forEach(k=>{
+  knPlanTage().slice(-40).forEach(k=>{
     ((state.plans[k]||{}).sites||[]).forEach(s=>{
       if(s.vehicle&&s.assignments&&s.assignments[emp])zaehler[s.vehicle]=(zaehler[s.vehicle]||0)+1;
     });
@@ -1639,8 +1651,8 @@ function knStammFahrzeug(emp){
   return beste?Number(beste):null;
 }
 
-function knVorschlaegeBauen(tagesDaten){
-  const plan=getDayPlan(state.selectedDate);
+function knVorschlaegeBauen(tagesDaten,datum){
+  const plan=getDayPlan(datum||state.selectedDate);
   const bekannt=knBekannteBaustellen();
   const nurStatus=state.kalenderStatusOnly||[];
   const sites=plan.sites||[];
@@ -1788,6 +1800,66 @@ function knVorschlaegeUebernehmen(){
   if(n){knEigeneZeilenErgaenzen(plan);knSortiereZeilen(plan);state.plans[k]=plan;fbWrite('plans/'+k,plan,100);renderPlanView();}
   closeModal();
   showToast(n?'✓ '+n+' übernommen':'Nichts übernommen','success');
+}
+
+// --- Abweichungen über mehrere Tage finden ---
+let knPruefDaten=null;
+
+function knKalenderIds(){
+  const kal={};
+  Object.keys(state.kalender||{}).forEach(e=>{if(state.kalender[e])kal[e]=state.kalender[e];});
+  return kal;
+}
+
+function knPruefeZeitraum(){
+  const kal=knKalenderIds();
+  if(!Object.keys(kal).length){showToast('Keine Kalender zugeordnet – siehe Einstellungen','error');return;}
+  const von=dateKey(state.selectedDate);
+  const b=new Date(state.selectedDate);b.setDate(b.getDate()+13);
+  const bis=dateKey(b);
+  showToast('Prüfe 14 Tage…','success');
+  functions.httpsCallable('syncKalender')({von,bis,kalender:kal})
+    .then(res=>{
+      const daten=res.data||{};
+      knPruefDaten=daten.tage||{};
+      knZeigePruefung(von,bis,daten.fehler||[]);
+    })
+    .catch(e=>showToast('Fehler: '+(e.message||e),'error'));
+}
+
+function knZeigePruefung(von,bis,fehler){
+  const wt=['So','Mo','Di','Mi','Do','Fr','Sa'];
+  const zeilen=[];let mit=0,geprueft=0;
+  const d=new Date(von+'T00:00:00'),ende=new Date(bis+'T00:00:00');
+  while(d<=ende){
+    const k=dateKey(d);
+    const anzahl=knVorschlaegeBauen(knPruefDaten[k]||{},new Date(d)).length;
+    // Wochenenden nur zeigen, wenn dort tatsächlich etwas ansteht
+    if(d.getDay()!==0&&d.getDay()!==6||anzahl){
+      geprueft++;if(anzahl)mit++;
+      zeilen.push(`<div class="kn-pruef-tag${anzahl?'':' leer'}"${anzahl?' onclick="knPruefTagOeffnen(\''+k+'\')"':''}>
+        <span>${wt[d.getDay()]} ${fmtDate(k)}</span>
+        <span class="kn-pruef-anzahl">${anzahl?anzahl+(anzahl===1?' Abweichung':' Abweichungen'):'stimmt'}</span>
+      </div>`);
+    }
+    d.setDate(d.getDate()+1);
+  }
+  const fehlerHtml=fehler.length?`<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+    <div style="font-size:11px;color:var(--red);margin-bottom:4px">Nicht gelesen:</div>
+    ${fehler.map(f=>`<div style="font-size:11px;color:var(--text3)">${escHtml(f.mitarbeiter)}: ${escHtml(f.meldung)}</div>`).join('')}
+  </div>`:'';
+  showModal({title:'Abgleich '+fmtDate(von)+' – '+fmtDate(bis),
+    content:`<div style="font-size:12px;color:var(--text2);margin-bottom:8px">${geprueft} Tage geprüft, <b>${mit}</b> mit Abweichungen. Tag anklicken zum Bearbeiten.</div>
+      <div style="max-height:340px;overflow:auto">${zeilen.join('')}</div>${fehlerHtml}`,
+    actions:[{label:'Schliessen',cancel:true}]});
+}
+
+function knPruefTagOeffnen(k){
+  const t=k.split('-').map(Number);
+  state.selectedDate=new Date(t[0],t[1]-1,t[2]);
+  state.currentDate=new Date(t[0],t[1]-1,1);
+  render();
+  knZeigeVorschlaege(knVorschlaegeBauen(knPruefDaten[k]||{},state.selectedDate),[]);
 }
 
 // ===== MODAL / CTX =====
