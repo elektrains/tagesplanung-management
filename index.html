@@ -279,6 +279,8 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .kn-pruef-tag.leer{color:var(--text3);cursor:default;}
 .kn-pruef-tag.leer:hover{background:transparent;}
 .kn-pruef-tag.leer .kn-pruef-anzahl{color:var(--text3);font-weight:400;}
+.kn-zurueck{font-size:11px;color:var(--accent);cursor:pointer;margin-bottom:8px;display:inline-block;}
+.kn-zurueck:hover{text-decoration:underline;}
 /* Loader */
 .loader{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:9999;}
 .loader-logo{height:60px;}
@@ -1745,11 +1747,11 @@ function knSortiereZeilen(plan){
 
 let knVorschlagListe=[];
 function knKalenderVorschlaege(){
-  const kal={};
-  Object.keys(state.kalender||{}).forEach(e=>{if(state.kalender[e])kal[e]=state.kalender[e];});
+  const kal=knKalenderIds();
   if(!Object.keys(kal).length){
     showToast('Keine Kalender zugeordnet – siehe Einstellungen','error');return;
   }
+  knAusPruefung=false;
   const tag=dateKey(state.selectedDate);
   showToast('Kalender werden gelesen…','success');
   functions.httpsCallable('syncKalender')({von:tag,bis:tag,kalender:kal})
@@ -1762,19 +1764,20 @@ function knKalenderVorschlaege(){
 
 function knZeigeVorschlaege(liste,fehler){
   knVorschlagListe=liste;
+  const zurueck=knAusPruefung?'<div class="kn-zurueck" onclick="knZeigePruefung()">← Zurück zur Übersicht</div>':'';
   const fehlerHtml=fehler.length?`<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
     <div style="font-size:11px;color:var(--red);margin-bottom:4px">Nicht gelesen:</div>
     ${fehler.map(f=>`<div style="font-size:11px;color:var(--text3)">${escHtml(f.mitarbeiter)}: ${escHtml(f.meldung)}</div>`).join('')}
   </div>`:'';
   const titel='Aus Kalender – '+fmtDate(dateKey(state.selectedDate));
   if(!liste.length){
-    showModal({title:titel,content:`<div style="font-size:12px;color:var(--text2)">Nichts zu übernehmen – die Planung entspricht bereits den Kalendern.</div>${fehlerHtml}`,
+    showModal({title:titel,content:`${zurueck}<div style="font-size:12px;color:var(--text2)">Nichts zu übernehmen – die Planung entspricht bereits den Kalendern.</div>${fehlerHtml}`,
       actions:[{label:'Schliessen',cancel:true}]});
     return;
   }
   const rows=liste.map((x,i)=>`<label class="kn-vorschlag"><input type="checkbox" checked data-vi="${i}"><span>${escHtml(x.text)}</span></label>`).join('');
   showModal({title:titel,
-    content:`<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Bestehende Einträge werden nicht überschrieben.</div>
+    content:`${zurueck}<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Nur Angehaktes wird übernommen.</div>
       <div style="max-height:320px;overflow:auto">${rows}</div>${fehlerHtml}`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Übernehmen',action:knVorschlaegeUebernehmen}]});
 }
@@ -1800,10 +1803,12 @@ function knVorschlaegeUebernehmen(){
   if(n){knEigeneZeilenErgaenzen(plan);knSortiereZeilen(plan);state.plans[k]=plan;fbWrite('plans/'+k,plan,100);renderPlanView();}
   closeModal();
   showToast(n?'✓ '+n+' übernommen':'Nichts übernommen','success');
+  // Aus der 14-Tage-Prüfung gekommen? Dann zurück in die Übersicht, neu gezählt.
+  if(knAusPruefung)knZeigePruefung();
 }
 
 // --- Abweichungen über mehrere Tage finden ---
-let knPruefDaten=null;
+let knPruefDaten=null,knPruefBereich=null,knAusPruefung=false;
 
 function knKalenderIds(){
   const kal={};
@@ -1822,12 +1827,15 @@ function knPruefeZeitraum(){
     .then(res=>{
       const daten=res.data||{};
       knPruefDaten=daten.tage||{};
-      knZeigePruefung(von,bis,daten.fehler||[]);
+      knPruefBereich={von,bis,fehler:daten.fehler||[]};
+      knZeigePruefung();
     })
     .catch(e=>showToast('Fehler: '+(e.message||e),'error'));
 }
 
-function knZeigePruefung(von,bis,fehler){
+function knZeigePruefung(){
+  if(!knPruefBereich)return;
+  const von=knPruefBereich.von,bis=knPruefBereich.bis,fehler=knPruefBereich.fehler||[];
   const wt=['So','Mo','Di','Mi','Do','Fr','Sa'];
   const zeilen=[];let mit=0,geprueft=0;
   const d=new Date(von+'T00:00:00'),ende=new Date(bis+'T00:00:00');
@@ -1859,6 +1867,7 @@ function knPruefTagOeffnen(k){
   state.selectedDate=new Date(t[0],t[1]-1,t[2]);
   state.currentDate=new Date(t[0],t[1]-1,1);
   render();
+  knAusPruefung=true;
   knZeigeVorschlaege(knVorschlaegeBauen(knPruefDaten[k]||{},state.selectedDate),[]);
 }
 
