@@ -266,6 +266,12 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .kn-drop{border:1px dashed var(--border2);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--text3);text-align:center;cursor:pointer;transition:all .15s;}
 .kn-drop:hover{border-color:var(--text2);color:var(--text2);}
 .kn-drop.drag{border-color:var(--accent);color:var(--accent);background:var(--bg3);}
+.kn-kal-input{flex:1;min-width:0;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:5px 8px;color:var(--text);font-size:11px;font-family:inherit;}
+.kn-kal-input:focus{outline:none;border-color:var(--accent);}
+.kn-kal-nurstatus{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text3);white-space:nowrap;cursor:pointer;}
+.kn-vorschlag{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);cursor:pointer;}
+.kn-vorschlag:last-child{border-bottom:none;}
+.kn-vorschlag:hover{background:var(--bg3);}
 /* Loader */
 .loader{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:9999;}
 .loader-logo{height:60px;}
@@ -416,6 +422,8 @@ let state = {
   knFilter: '',
   knSelected: {},
   settings: {},
+  kalender: {},
+  kalenderStatusOnly: ['Timo','Christoph'],
   myId: 'user_' + Math.random().toString(36).slice(2,8),
   myName: '',
   empFilter: null
@@ -503,6 +511,8 @@ function setupListeners() {
       else state.inactiveEmployees = [];
       if (s.employeeDates) state.employeeDates = s.employeeDates;
       else state.employeeDates = {};
+      state.kalender = s.kalender || {};
+      if (s.kalenderStatusOnly) state.kalenderStatusOnly = s.kalenderStatusOnly;
     }
     render();
   });
@@ -684,6 +694,7 @@ function renderPlanView(){
       <div class="day-actions">
         <button class="action-btn" onclick="saveAsTemplate()">💾 Als Vorlage speichern</button>
         <button class="action-btn" onclick="applyTemplate()">📄 Vorlage anwenden</button>
+        <button class="action-btn" onclick="knKalenderVorschlaege()">📅 Aus Kalender</button>
         <button class="action-btn" onclick="copyPrevDay()">📋 Vortag kopieren</button>
         <button class="action-btn" onclick="clearDay()">🗑 Tag leeren</button>
         <button class="action-btn primary" onclick="addSite()">+ Baustelle</button>
@@ -1439,11 +1450,12 @@ function renderSettingsView(){
     ${upcomingSection}
     ${archivedSection}
     <div class="settings-section"><div class="settings-section-title">Fahrzeuge (${state.vehicles.length})</div>${vehRows}<button class="btn-add" onclick="addVeh()">+ Fahrzeug hinzufügen</button></div>
+    ${knKalenderSettingsHtml()}
     ${!state.meta?.kontrollenImportDone?`<div class="settings-section"><div class="settings-section-title">Kontrollen-Import</div><p style="font-size:12px;color:var(--text2);margin-bottom:10px">Importiert die bestehende Excel-Liste (${KONTROLLEN_IMPORT.length} Einträge) einmalig in den Kontrollen-Tab.</p><button class="btn-add" onclick="importKontrollenFromExcel()">+ Alte Kontrollliste importieren</button></div>`:''}
   </div>`;
 }
 
-function saveSettings(){fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[],employeeDates:state.employeeDates||{}},100);}
+function saveSettings(){fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[],employeeDates:state.employeeDates||{},kalender:state.kalender||{},kalenderStatusOnly:state.kalenderStatusOnly||[]},100);}
 
 function importKontrollenFromExcel(){
   if(!confirm('Alte Kontrollliste (' + KONTROLLEN_IMPORT.length + ' Einträge) aus Excel importieren?')) return;
@@ -1510,6 +1522,214 @@ function addEmp(){showModal({title:'Mitarbeiter hinzufügen',content:`<input cla
 function renameVeh(i){showModal({title:'Fahrzeug umbenennen',content:`<input class="modal-input" id="nn" value="${state.vehicles[i]}">`,actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){state.vehicles[i]=v;saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
 function removeVeh(i){state.vehicles.splice(i,1);saveSettings();renderSettingsView();}
 function addVeh(){showModal({title:'Fahrzeug hinzufügen',content:`<input class="modal-input" id="nn" placeholder="Fahrzeugname">`,actions:[{label:'Abbrechen',cancel:true},{label:'Hinzufügen',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){state.vehicles.push(v);saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
+
+// ===== KALENDER-SYNC =====
+// Beim ersten Einrichten per Knopfdruck vorbelegbar (Stand: alle "Elektra …"-Kalender)
+const KALENDER_BEKANNT={
+  'Timo':'uc15ukh9htl7gbdk98lqbukp6g@group.calendar.google.com',
+  'Christoph':'6bsjh4fjgteoeuk2grfjs9bsr8@group.calendar.google.com',
+  'Lukas':'lukas.elektrains@gmail.com',
+  'Stéphane':'sni50jm8cklaabln9476f1snmo@group.calendar.google.com',
+  'Reto B':'o2dujbtlci9h1lhri1mokd07kk@group.calendar.google.com',
+  'Reto M':'og57jiacq0o09dhcmm68b75ask@group.calendar.google.com',
+  'Oliver':'ircivsooogdibacol3vbneqqo8@group.calendar.google.com',
+  'Michael':'s0cojlkmhc41dig6gchqfh8200@group.calendar.google.com',
+  'Hristijan':'fhhqit0v3trf4oegfmqbjkarp0@group.calendar.google.com',
+  'Roman':'dbb14d2b25312f904cd38c730ccd9ae6c4974e162b8197b7dd077332c7c4b0c2@group.calendar.google.com',
+  'Ricardo':'l496g584fpc7jmc6as7cg7j1ss@group.calendar.google.com',
+  'Alexander':'6380210f641a64d55002999c46e3a765c73752370bbf725dbfda85a43f6cd830@group.calendar.google.com',
+  'Luis':'5a6429addbee729830c0efc419a061b46d856986fec62515e417b2202dfb8bf7@group.calendar.google.com',
+  'Jérome':'21caf19d0dffb3c160a7c712ed779d59e1c899afadcf1d9f4b03fac4d9762ce2@group.calendar.google.com',
+  'David':'e04836f37807fbe4be2675e670a0a78424a9e2eef59edb42592c249406856031@group.calendar.google.com',
+  'Naim':'b16814a5ca032c9a41994b6a86d75aadcab040d0e0555d461d92f732520b745f@group.calendar.google.com'
+};
+const KN_STATUS_TEXT={absent:'Abwesend',school:'Schule',half:'Halbtags','':'Anwesend'};
+
+function knAktiveMitarbeiter(){
+  const heute=dateKey(new Date());
+  return state.employees.filter(e=>!(state.inactiveEmployees||[]).includes(e)&&!isArchivedAsOf(e,heute));
+}
+
+function knKalenderSettingsHtml(){
+  const kal=state.kalender||{};
+  const nurStatus=state.kalenderStatusOnly||[];
+  const rows=knAktiveMitarbeiter().map(e=>{
+    const id=kal[e]||'';
+    return `<div class="settings-row">
+      <div class="settings-row-name" style="flex:0 0 130px">${escHtml(e)}</div>
+      <input class="kn-kal-input" value="${escHtml(id)}" placeholder="Kalender-ID (leer = wird nicht gelesen)" onchange="knSetKalender('${e.replace(/'/g,"\\'")}',this.value)">
+      <label class="kn-kal-nurstatus" title="Nur Ferien/Schule/Frei übernehmen, keine Baustellen"><input type="checkbox"${nurStatus.includes(e)?' checked':''} onchange="knSetNurStatus('${e.replace(/'/g,"\\'")}',this.checked)"> nur Status</label>
+    </div>`;
+  }).join('');
+  const zugeordnet=knAktiveMitarbeiter().filter(e=>kal[e]).length;
+  return `<div class="settings-section">
+    <div class="settings-section-title">Kalender-Zuordnung (${zugeordnet} von ${knAktiveMitarbeiter().length})</div>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Wer hier keine Kalender-ID hat, wird beim Abgleich übersprungen und wie bisher von Hand erfasst. „nur Status“ liest ausschliesslich Ferien/Schule/Frei — sinnvoll für die Projektleiter, deren Termine keine Baustellenzeilen sind.</p>
+    ${rows}
+    <button class="btn-add" onclick="knKalenderVorbelegen()">Bekannte Kalender eintragen</button>
+  </div>`;
+}
+
+function knSetKalender(emp,wert){
+  state.kalender=state.kalender||{};
+  const v=(wert||'').trim();
+  if(v)state.kalender[emp]=v;else delete state.kalender[emp];
+  saveSettings();
+}
+function knSetNurStatus(emp,an){
+  const l=new Set(state.kalenderStatusOnly||[]);
+  if(an)l.add(emp);else l.delete(emp);
+  state.kalenderStatusOnly=[...l];
+  saveSettings();
+}
+function knKalenderVorbelegen(){
+  state.kalender=state.kalender||{};
+  let n=0;
+  Object.entries(KALENDER_BEKANNT).forEach(([emp,id])=>{
+    if(state.employees.includes(emp)&&!state.kalender[emp]){state.kalender[emp]=id;n++;}
+  });
+  saveSettings();renderSettingsView();
+  showToast(n?'✓ '+n+' Kalender eingetragen':'Alle bereits eingetragen','success');
+}
+
+// --- Baustellennamen erkennen ---
+const KN_STOPP=new Set(['und','mit','der','die','das','den','dem','ins','in','im','am','an','auf','bei','für','von','vom','zum','zur','neue','neuer','neues','div','diverse','std','ca','herr','frau']);
+function knTokens(s){
+  return (s||'').toLowerCase().replace(/[.,;:/()\[\]{}"'`–—+-]+/g,' ').split(/\s+/)
+    .filter(w=>w.length>=3&&!KN_STOPP.has(w));
+}
+// Baustellennamen, die in den letzten Plänen tatsächlich vorkamen
+function knBekannteBaustellen(){
+  const zaehler={};
+  Object.keys(state.plans||{}).sort().slice(-60).forEach(k=>{
+    ((state.plans[k]||{}).sites||[]).forEach(s=>{
+      const n=(s.name||'').trim();
+      if(n)zaehler[n]=(zaehler[n]||0)+1;
+    });
+  });
+  return Object.keys(zaehler).sort((a,b)=>zaehler[b]-zaehler[a]);
+}
+// "Apparatemontage und Leuchten Traube" -> "Traube", "St. Johannsen - GSA" -> "St. Johannsen"
+function knBaustelleAusTitel(titel,bekannt){
+  const tk=new Set(knTokens(titel));
+  let best=null,bestTreffer=0,bestScore=0;
+  bekannt.forEach(name=>{
+    const nk=knTokens(name);
+    if(!nk.length||!tk.size)return;
+    const treffer=nk.filter(w=>tk.has(w)).length;
+    if(!treffer)return;
+    const score=treffer/Math.min(nk.length,tk.size);
+    if(score>bestScore||(score===bestScore&&treffer>bestTreffer)){bestScore=score;bestTreffer=treffer;best=name;}
+  });
+  if(best&&bestScore>=0.6)return best;
+  const vorDemStrich=titel.split(/\s[–—-]\s/)[0].trim();
+  return vorDemStrich||titel.trim();
+}
+// In welchem Fahrzeug sitzt der Mitarbeiter üblicherweise?
+function knStammFahrzeug(emp){
+  const zaehler={};
+  Object.keys(state.plans||{}).sort().slice(-40).forEach(k=>{
+    ((state.plans[k]||{}).sites||[]).forEach(s=>{
+      if(s.vehicle&&s.assignments&&s.assignments[emp])zaehler[s.vehicle]=(zaehler[s.vehicle]||0)+1;
+    });
+  });
+  const beste=Object.keys(zaehler).sort((a,b)=>zaehler[b]-zaehler[a])[0];
+  return beste?Number(beste):null;
+}
+
+function knVorschlaegeBauen(tagesDaten){
+  const plan=getDayPlan(state.selectedDate);
+  const bekannt=knBekannteBaustellen();
+  const nurStatus=state.kalenderStatusOnly||[];
+  const v=[];
+  Object.keys(tagesDaten||{}).forEach(emp=>{
+    const d=tagesDaten[emp]||{};
+    const jetzt=(plan.globalStatus||{})[emp]||'';
+    if(d.status&&d.status!==jetzt){
+      v.push({typ:'status',emp,wert:d.status,
+        text:emp+' → '+KN_STATUS_TEXT[d.status]+' (bisher '+(KN_STATUS_TEXT[jetzt]||jetzt)+')'});
+    }
+    if(nurStatus.includes(emp))return;
+    if(!d.einsaetze||!d.einsaetze.length)return;
+    let namen=[];
+    d.einsaetze.forEach(e=>{const n=knBaustelleAusTitel(e.titel,bekannt);if(n&&namen.indexOf(n)<0)namen.push(n);});
+    // "Tertianum" neben "Tertianum/Schulhaus Gampelen" – der längere Name gewinnt
+    namen=namen.filter(a=>!namen.some(b=>b!==a&&b.toLowerCase().indexOf(a.toLowerCase())>=0));
+    if(!namen.length)return;
+    const name=namen.join('/');
+    const mark=d.haelfte||'X';
+    const sites=plan.sites||[];
+    // Steht der Mann schon auf einer Zeile dieses Namens? Dann nichts vorschlagen.
+    if(sites.some(s=>(s.name||'').trim().toLowerCase()===name.toLowerCase()&&(s.assignments||{})[emp]))return;
+    const fz=knStammFahrzeug(emp);
+    let idx=sites.findIndex(s=>(s.name||'').trim().toLowerCase()===name.toLowerCase());
+    let hinweis='';
+    if(idx<0&&fz!=null){idx=sites.findIndex(s=>s.vehicle===fz&&!(s.name||'').trim());}
+    if(idx<0){hinweis=' — neue Zeile';}
+    v.push({typ:'einsatz',emp,name,mark,siteIdx:idx<0?null:idx,fahrzeug:fz,
+      text:emp+' → '+name+' ['+mark+']'+hinweis});
+  });
+  return v;
+}
+
+let knVorschlagListe=[];
+function knKalenderVorschlaege(){
+  const kal={};
+  Object.keys(state.kalender||{}).forEach(e=>{if(state.kalender[e])kal[e]=state.kalender[e];});
+  if(!Object.keys(kal).length){
+    showToast('Keine Kalender zugeordnet – siehe Einstellungen','error');return;
+  }
+  const tag=dateKey(state.selectedDate);
+  showToast('Kalender werden gelesen…','success');
+  functions.httpsCallable('syncKalender')({von:tag,bis:tag,kalender:kal})
+    .then(res=>{
+      const daten=res.data||{};
+      knZeigeVorschlaege(knVorschlaegeBauen((daten.tage||{})[tag]||{}),daten.fehler||[]);
+    })
+    .catch(e=>showToast('Fehler: '+(e.message||e),'error'));
+}
+
+function knZeigeVorschlaege(liste,fehler){
+  knVorschlagListe=liste;
+  const fehlerHtml=fehler.length?`<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+    <div style="font-size:11px;color:var(--red);margin-bottom:4px">Nicht gelesen:</div>
+    ${fehler.map(f=>`<div style="font-size:11px;color:var(--text3)">${escHtml(f.mitarbeiter)}: ${escHtml(f.meldung)}</div>`).join('')}
+  </div>`:'';
+  const titel='Aus Kalender – '+fmtDate(dateKey(state.selectedDate));
+  if(!liste.length){
+    showModal({title:titel,content:`<div style="font-size:12px;color:var(--text2)">Nichts zu übernehmen – die Planung entspricht bereits den Kalendern.</div>${fehlerHtml}`,
+      actions:[{label:'Schliessen',cancel:true}]});
+    return;
+  }
+  const rows=liste.map((x,i)=>`<label class="kn-vorschlag"><input type="checkbox" checked data-vi="${i}"><span>${escHtml(x.text)}</span></label>`).join('');
+  showModal({title:titel,
+    content:`<div style="font-size:11px;color:var(--text3);margin-bottom:8px">Bestehende Einträge werden nicht überschrieben.</div>
+      <div style="max-height:320px;overflow:auto">${rows}</div>${fehlerHtml}`,
+    actions:[{label:'Abbrechen',cancel:true},{label:'Übernehmen',action:knVorschlaegeUebernehmen}]});
+}
+
+function knVorschlagAnwenden(v,plan){
+  if(v.typ==='status'){plan.globalStatus=plan.globalStatus||{};plan.globalStatus[v.emp]=v.wert;return;}
+  plan.sites=plan.sites||[];
+  let site=v.siteIdx!=null?plan.sites[v.siteIdx]:null;
+  if(!site){site={id:'s'+Date.now()+Math.random(),name:'',vehicle:v.fahrzeug||null,assignments:{}};plan.sites.push(site);}
+  if(!(site.name||'').trim())site.name=v.name;
+  site.assignments=site.assignments||{};
+  site.assignments[v.emp]=v.mark;
+}
+
+function knVorschlaegeUebernehmen(){
+  const plan=getDayPlan(state.selectedDate);
+  let n=0;
+  document.querySelectorAll('#modalBox input[data-vi]').forEach(cb=>{
+    if(!cb.checked)return;
+    knVorschlagAnwenden(knVorschlagListe[Number(cb.dataset.vi)],plan);n++;
+  });
+  const k=dateKey(state.selectedDate);
+  if(n){state.plans[k]=plan;fbWrite('plans/'+k,plan,100);renderPlanView();}
+  closeModal();
+  showToast(n?'✓ '+n+' übernommen':'Nichts übernommen','success');
+}
 
 // ===== MODAL / CTX =====
 function showModal({title,content,actions}){
