@@ -1630,7 +1630,10 @@ function knBaustelleAusTitel(titel,bekannt){
     if(!nk.length||!tk.size)return;
     const treffer=nk.filter(w=>tk.has(w)).length;
     if(!treffer)return;
-    const score=treffer/Math.min(nk.length,tk.size);
+    // Nur wie viel vom BEKANNTEN Namen im Titel steckt zählt. Mit Math.min(...,tk.size)
+    // reichte ein einziges gemeinsames Wort für Score 1 — "Gugger" wurde so zu
+    // "Gugger / Brönimann / Rytz", weil "gugger" darin vorkommt.
+    const score=treffer/nk.length;
     if(score>bestScore||(score===bestScore&&treffer>bestTreffer)){bestScore=score;bestTreffer=treffer;best=name;}
   });
   if(best&&bestScore>=0.6)return best;
