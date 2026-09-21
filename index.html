@@ -281,6 +281,28 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .kn-pruef-tag.leer .kn-pruef-anzahl{color:var(--text3);font-weight:400;}
 .kn-zurueck{font-size:11px;color:var(--accent);cursor:pointer;margin-bottom:8px;display:inline-block;}
 .kn-zurueck:hover{text-decoration:underline;}
+/* Service-Abos */
+.nav-badge{display:none;min-width:17px;height:17px;padding:0 5px;margin-left:7px;border-radius:99px;background:var(--red);color:#fff;font-size:10px;font-weight:700;line-height:17px;text-align:center;vertical-align:middle;box-sizing:border-box;}
+.nav-badge.on{display:inline-block;}
+.nav-btn.active .nav-badge{background:#fff;color:var(--accent);}
+/* Datum, Betrag und PL bekommen eine Mindestbreite – gekürzt werden darf nur,
+   was man notfalls im Detailfenster nachliest, nie eine Zahl */
+.abo-row{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:grid;grid-template-columns:minmax(140px,1.5fr) minmax(100px,1.1fr) auto minmax(92px,.7fr) minmax(98px,.8fr) minmax(92px,.7fr) auto;gap:12px;align-items:center;margin-bottom:8px;cursor:pointer;}
+.abo-row>*{min-width:0;}
+/* Ohne Kürzen schieben lange Anlagen- und Ortsnamen die Nachbarspalten ineinander */
+.abo-row .kn-name,.abo-row .kn-sub,.abo-row .kn-label,.abo-row .kn-val,.abo-row .kn-pl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.abo-row:hover{border-color:var(--border2);}
+.abo-row.abo-faellig{background:var(--red-bg);border-color:var(--red);}
+.abo-row.abo-faellig .kn-name,.abo-row.abo-faellig .kn-val{color:#fff;}
+.abo-row.abo-faellig .kn-sub,.abo-row.abo-faellig .kn-label{color:rgba(255,255,255,.8);}
+.abo-typen{display:flex;flex-direction:column;gap:3px;align-items:flex-start;}
+.abo-typ{font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;border:1px solid var(--border2);color:var(--text2);white-space:nowrap;}
+.abo-typ.loxone{background:var(--green-bg);color:var(--green);border-color:var(--green);}
+.abo-typ.smartme{background:var(--blue-bg);color:#fff;border-color:var(--blue);}
+.abo-btn{background:var(--bg3);border:1px solid var(--border2);color:var(--text2);border-radius:6px;padding:6px 10px;font-size:11px;font-family:inherit;cursor:pointer;white-space:nowrap;transition:all .15s;}
+.abo-btn:hover{border-color:var(--accent);color:var(--text);}
+.abo-row.abo-faellig .abo-btn{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.45);color:#fff;}
+.abo-row.abo-faellig .abo-btn:hover{background:rgba(255,255,255,.25);}
 /* Loader */
 .loader{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:9999;}
 .loader-logo{height:60px;}
@@ -338,7 +360,8 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
     <div class="topbar-nav">
       <button class="nav-btn active" onclick="setView('plan')">Tagesplanung</button>
       <button class="nav-btn" onclick="setView('employees')">Mitarbeiter-Ansicht</button>
-      <button class="nav-btn" onclick="setView('kontrollen')">Kontrollen</button>
+      <button class="nav-btn" onclick="setView('kontrollen')">Kontrollen<span class="nav-badge" id="navBadgeKn"></span></button>
+      <button class="nav-btn" onclick="setView('abos')">Service-Abos<span class="nav-badge" id="navBadgeAbo"></span></button>
       <button class="nav-btn" onclick="setView('settings')">Einstellungen</button>
     </div>
     <div class="topbar-right">
@@ -430,6 +453,9 @@ let state = {
   knView: 'offen',
   knFilter: '',
   knSelected: {},
+  abos: {},
+  aboView: 'aktiv',
+  aboFilter: '',
   settings: {},
   kalender: {},
   kalenderStatusOnly: ['Timo','Christoph'],
@@ -537,7 +563,14 @@ function setupListeners() {
   // Kontrollen
   db.ref('kontrollen').on('value', snap => {
     state.kontrollen = snap.val() || {};
+    renderNavBadges();
     if (state.view === 'kontrollen') renderKontrollenView();
+  });
+  // Service-Abos
+  db.ref('abos').on('value', snap => {
+    state.abos = snap.val() || {};
+    renderNavBadges();
+    if (state.view === 'abos') renderAboView();
   });
   db.ref('meta').on('value', snap => {
     state.meta = snap.val() || {};
@@ -620,8 +653,8 @@ function saveAsTemplate() {
   });
 }
 
-function setView(v){state.view=v;document.querySelectorAll('.nav-btn').forEach((b,i)=>b.classList.toggle('active',['plan','employees','kontrollen','settings'][i]===v));render();}
-function render(){renderSidebar();if(state.view==='plan')renderPlanView();else if(state.view==='employees')renderEmployeeView();else if(state.view==='kontrollen')renderKontrollenView();else renderSettingsView();}
+function setView(v){state.view=v;document.querySelectorAll('.nav-btn').forEach((b,i)=>b.classList.toggle('active',['plan','employees','kontrollen','abos','settings'][i]===v));render();}
+function render(){renderSidebar();renderNavBadges();if(state.view==='plan')renderPlanView();else if(state.view==='employees')renderEmployeeView();else if(state.view==='kontrollen')renderKontrollenView();else if(state.view==='abos')renderAboView();else renderSettingsView();}
 
 function renderSidebar(){
   renderMiniCal();
@@ -1872,6 +1905,236 @@ function knPruefTagOeffnen(k){
   render();
   knAusPruefung=true;
   knZeigeVorschlaege(knVorschlaegeBauen(knPruefDaten[k]||{},state.selectedDate),[]);
+}
+
+// ===== SERVICE-ABOS =====
+// Loxone und Smart-me laufen als Abo mit festem Rhythmus. Ein Abo ist fällig,
+// sobald das nächste Rechnungsdatum erreicht ist — dann wird die Zeile rot und
+// zählt im roten Punkt oben im Menü mit.
+const ABO_RHYTHMEN={
+  monatlich:{text:'Monatlich',monate:1},
+  quartal:{text:'Quartalsweise',monate:3},
+  halbjaehrlich:{text:'Halbjährlich',monate:6},
+  jaehrlich:{text:'Jährlich',monate:12},
+  zweijaehrlich:{text:'Alle 2 Jahre',monate:24}
+};
+
+function aboSetView(v){state.aboView=v;renderAboView();}
+function aboFilterInput(){state.aboFilter=document.getElementById('aboSearch')?.value||'';renderAboList();}
+
+// 31.01. + 1 Monat = 28.02. — ohne Klemmen auf den letzten Tag liefe Date() auf den 03.03. über
+function aboPlusMonate(key,monate){
+  if(!key)return null;
+  const [y,m,d]=key.split('-').map(Number);
+  const ziel=new Date(y,m-1+monate,1);
+  const letzterTag=new Date(ziel.getFullYear(),ziel.getMonth()+1,0).getDate();
+  ziel.setDate(Math.min(d,letzterTag));
+  return dateKey(ziel);
+}
+
+function aboRhythmus(a){return ABO_RHYTHMEN[a&&a.rhythmus]||ABO_RHYTHMEN.jaehrlich;}
+// Solange nie verrechnet wurde, gilt das Eröffnungsdatum als erste Fälligkeit
+function aboNaechste(a){return (a&&(a.naechsteRechnung||a.eroeffnung))||null;}
+function aboIstAktiv(a){return !a||a.aktiv!==false;}
+function aboKunde(a){return (a.firma||'').trim()||[a.name,a.vorname].filter(Boolean).join(', ');}
+function aboTypen(a){const t=[];if(a&&a.loxone)t.push('Loxone');if(a&&a.smartme)t.push('Smart-me');return t;}
+function aboFmtKosten(v){const n=Number(v);return v===''||v==null||!isFinite(n)?'—':'CHF '+n.toFixed(2);}
+function aboIstFaellig(a,heute){const n=aboNaechste(a);return aboIstAktiv(a)&&!!n&&n<=heute;}
+
+// ===== ROTE PUNKTE IM MENÜ =====
+// Zählen genau das, was in der jeweiligen Liste rot hinterlegt ist
+function aboOffeneAnzahl(){
+  const heute=dateKey(new Date());
+  return Object.values(state.abos||{}).filter(a=>aboIstFaellig(a,heute)).length;
+}
+function knOffeneAnzahl(){
+  const heute=dateKey(new Date());
+  return Object.values(state.kontrollen||{}).filter(k=>!k.erledigt&&!!k.frist&&k.frist<=heute).length;
+}
+function renderNavBadges(){
+  [['navBadgeKn',knOffeneAnzahl(),'Kontrolle','Kontrollen'],
+   ['navBadgeAbo',aboOffeneAnzahl(),'Abo','Abos']].forEach(([id,n,ein,viele])=>{
+    const el=document.getElementById(id);if(!el)return;
+    el.textContent=n>99?'99+':String(n);
+    el.classList.toggle('on',n>0);
+    el.title=n+' '+(n===1?ein:viele)+' überfällig';
+  });
+}
+
+function aboSortedEntries(){
+  const wantAktiv=state.aboView!=='gekuendigt';
+  const f=(state.aboFilter||'').toLowerCase();
+  return Object.entries(state.abos||{})
+    .filter(([id,a])=>aboIstAktiv(a)===wantAktiv)
+    .filter(([id,a])=>!f||[a.firma,a.name,a.vorname,a.adresse,a.plz,a.ort,a.anlage].join(' ').toLowerCase().includes(f))
+    .sort((a,b)=>{
+      const na=aboNaechste(a[1])||'9999',nb=aboNaechste(b[1])||'9999';
+      if(na!==nb)return na<nb?-1:1;
+      return aboKunde(a[1]).localeCompare(aboKunde(b[1]));
+    });
+}
+
+function renderAboView(){
+  document.getElementById('mainContent').innerHTML=`<div class="kn-wrap">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div class="kn-toptabs">
+        <div class="kn-toptab${state.aboView!=='gekuendigt'?' active':''}" onclick="aboSetView('aktiv')">Aktiv</div>
+        <div class="kn-toptab${state.aboView==='gekuendigt'?' active':''}" onclick="aboSetView('gekuendigt')">Gekündigt</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="kn-search" id="aboSearch" placeholder="Suche Firma, Name, Anlage..." oninput="aboFilterInput()" value="${escHtml(state.aboFilter||'')}">
+        <button class="action-btn primary" onclick="addAbo()">+ Neues Abo</button>
+      </div>
+    </div>
+    <div id="aboList"></div>
+  </div>`;
+  renderAboList();
+}
+
+function renderAboList(){
+  const el=document.getElementById('aboList');if(!el)return;
+  const heute=dateKey(new Date());
+  const entries=aboSortedEntries();
+  if(!entries.length){el.innerHTML='<div class="kn-empty">Keine Einträge</div>';return;}
+  el.innerHTML=entries.map(([id,a])=>{
+    const naechste=aboNaechste(a);
+    const faellig=aboIstFaellig(a,heute);
+    const typen=aboTypen(a);
+    const anschrift=[a.adresse,[a.plz,a.ort].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    return `<div class="abo-row${faellig?' abo-faellig':''}" onclick="editAbo('${id}')">
+      <div>
+        <div class="kn-name">${escHtml(aboKunde(a))||'—'}</div>
+        <div class="kn-sub">${escHtml(anschrift)}</div>
+      </div>
+      <div><div class="kn-label">Anlage</div><div class="kn-val">${escHtml(a.anlage)||'—'}</div></div>
+      <div class="abo-typen">${typen.length?typen.map(t=>`<span class="abo-typ ${t==='Loxone'?'loxone':'smartme'}">${t}</span>`).join(''):'<span class="kn-val">—</span>'}</div>
+      <div class="kn-pl">${a.pl==='TH'?'PL: Timo':a.pl==='CB'?'PL: Christoph':escHtml(a.pl)||'—'}</div>
+      <div><div class="kn-label">Nächste Rechnung</div><div class="kn-val">${naechste?fmtDate(naechste):'—'}</div><div class="kn-sub">${escHtml(aboRhythmus(a).text)}</div></div>
+      <div><div class="kn-label">Kosten</div><div class="kn-val">${aboFmtKosten(a.kosten)}</div></div>
+      <div onclick="event.stopPropagation()">${aboIstAktiv(a)&&naechste?`<button class="abo-btn" onclick="aboVerrechnen('${id}')">✓ Verrechnet</button>`:''}</div>
+    </div>`;
+  }).join('');
+}
+
+// Verrechnet heisst: diese Periode ist erledigt, der Termin rückt genau einen
+// Rhythmus weiter. Liegt er dann immer noch in der Vergangenheit, bleibt die
+// Zeile rot — dann wurde eine Periode vergessen und muss ebenfalls gestellt werden.
+function aboVerrechnen(id){
+  const a=(state.abos||{})[id];if(!a)return;
+  const alt=aboNaechste(a);
+  if(!alt){showToast('Kein Rechnungsdatum gesetzt','error');return;}
+  const r=aboRhythmus(a);
+  const neu=aboPlusMonate(alt,r.monate);
+  showModal({title:'Als verrechnet markieren',
+    content:`<div style="font-size:12px;color:var(--text2);line-height:1.7">
+      <b style="color:var(--text)">${escHtml(aboKunde(a))}</b> — ${escHtml(aboTypen(a).join(' + '))||'—'}<br>
+      Rechnung vom <b style="color:var(--text)">${fmtDate(alt)}</b> über ${aboFmtKosten(a.kosten)} als verrechnet markieren.<br>
+      Nächste Fälligkeit: <b style="color:var(--text)">${fmtDate(neu)}</b> (${escHtml(r.text.toLowerCase())})
+    </div>`,
+    actions:[{label:'Abbrechen',cancel:true},{label:'Verrechnet',primary:true,action:()=>{
+      db.ref('abos/'+id).update({naechsteRechnung:neu,letzteVerrechnung:alt})
+        .then(()=>showToast('✓ Nächste Rechnung: '+fmtDate(neu),'success'))
+        .catch(e=>showToast('Fehler: '+e.message,'error'));
+      closeModal();
+    }}]});
+}
+
+function aboRhythmusOptions(sel){
+  return Object.keys(ABO_RHYTHMEN)
+    .map(k=>`<option value="${k}"${k===sel?' selected':''}>${ABO_RHYTHMEN[k].text}</option>`).join('');
+}
+
+function aboFormContent(a){
+  a=a||{};
+  return `
+  <div class="kn-form-grid">
+    <div><label class="kn-form-label">Firma</label><input class="modal-input" id="aboFirma" value="${escHtml(a.firma)}" placeholder="Firma (optional)"></div>
+    <div><label class="kn-form-label">Projektleiter</label><select class="modal-input" id="aboPl">${knPlOptions(a.pl||'')}</select></div>
+    <div><label class="kn-form-label">Vorname</label><input class="modal-input" id="aboVorname" value="${escHtml(a.vorname)}" placeholder="Vorname"></div>
+    <div><label class="kn-form-label">Name</label><input class="modal-input" id="aboName" value="${escHtml(a.name)}" placeholder="Name"></div>
+    <div><label class="kn-form-label">Adresse</label><input class="modal-input" id="aboAdresse" value="${escHtml(a.adresse)}" placeholder="Strasse und Nr."></div>
+    <div><label class="kn-form-label">PLZ / Ort</label><div style="display:flex;gap:6px">
+      <input class="modal-input" id="aboPlz" value="${escHtml(a.plz)}" placeholder="PLZ" style="flex:0 0 80px;width:80px">
+      <input class="modal-input" id="aboOrt" value="${escHtml(a.ort)}" placeholder="Ort"></div></div>
+    <div><label class="kn-form-label">Anlage</label><input class="modal-input" id="aboAnlage" value="${escHtml(a.anlage)}" placeholder="z.B. Miniserver EFH"></div>
+    <div><label class="kn-form-label">Eröffnungsdatum</label><input type="date" class="modal-input" id="aboEroeffnung" value="${a.eroeffnung||''}"></div>
+    <div><label class="kn-form-label">Kosten inkl. MwSt (CHF)</label><input type="number" step="0.05" min="0" class="modal-input" id="aboKosten" value="${escHtml(a.kosten)}" placeholder="0.00"></div>
+    <div><label class="kn-form-label">Wiederholung</label><select class="modal-input" id="aboRhythmus">${aboRhythmusOptions(a.rhythmus||'jaehrlich')}</select></div>
+    <div><label class="kn-form-label">Nächste Rechnung</label><input type="date" class="modal-input" id="aboNaechsteRg" value="${a.naechsteRechnung||''}"></div>
+    <div><label class="kn-form-label">Zuletzt verrechnet</label><input type="date" class="modal-input" id="aboLetzteRg" value="${a.letzteVerrechnung||''}"></div>
+  </div>
+  <label class="kn-form-label">Abo-Typ</label>
+  <div style="display:flex;gap:16px">
+    <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="aboLoxone"${a.loxone?' checked':''}> Loxone</label>
+    <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="aboSmartme"${a.smartme?' checked':''}> Smart-me</label>
+  </div>
+  <label class="kn-form-label">Bemerkungen</label>
+  <textarea class="modal-input" id="aboBemerkungen" rows="2" placeholder="Bemerkungen (optional)">${escHtml(a.bemerkungen)}</textarea>
+  <div style="margin-top:12px">
+    <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="aboAktiv"${aboIstAktiv(a)?' checked':''}> Abo aktiv</label>
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:var(--text3)">Bleibt „Nächste Rechnung" leer, gilt das Eröffnungsdatum als erste Fälligkeit.</div>`;
+}
+
+function aboReadForm(){
+  const kosten=document.getElementById('aboKosten').value;
+  return {
+    firma:document.getElementById('aboFirma').value.trim(),
+    vorname:document.getElementById('aboVorname').value.trim(),
+    name:document.getElementById('aboName').value.trim(),
+    adresse:document.getElementById('aboAdresse').value.trim(),
+    plz:document.getElementById('aboPlz').value.trim(),
+    ort:document.getElementById('aboOrt').value.trim(),
+    anlage:document.getElementById('aboAnlage').value.trim(),
+    loxone:document.getElementById('aboLoxone').checked,
+    smartme:document.getElementById('aboSmartme').checked,
+    pl:document.getElementById('aboPl').value,
+    eroeffnung:document.getElementById('aboEroeffnung').value||null,
+    kosten:kosten===''?null:Number(kosten),
+    rhythmus:document.getElementById('aboRhythmus').value,
+    naechsteRechnung:document.getElementById('aboNaechsteRg').value||null,
+    letzteVerrechnung:document.getElementById('aboLetzteRg').value||null,
+    bemerkungen:document.getElementById('aboBemerkungen').value.trim(),
+    aktiv:document.getElementById('aboAktiv').checked
+  };
+}
+
+function aboPruefeForm(data){
+  if(!data.firma&&!data.name){showToast('Bitte Firma oder Name eingeben','error');return false;}
+  if(!data.loxone&&!data.smartme){showToast('Bitte Loxone und/oder Smart-me ankreuzen','error');return false;}
+  if(!data.naechsteRechnung)data.naechsteRechnung=data.eroeffnung;
+  return true;
+}
+
+function addAbo(){
+  const save=()=>{
+    const data=aboReadForm();
+    if(!aboPruefeForm(data))return;
+    const id='a'+Date.now();
+    db.ref('abos/'+id).set({...data,createdAt:Date.now()}).catch(e=>showToast('Fehler: '+e.message,'error'));
+    closeModal();
+  };
+  showModal({title:'Neues Service-Abo',content:aboFormContent({pl:knDetectPl(),rhythmus:'jaehrlich'}),
+    actions:[{label:'Abbrechen',cancel:true},{label:'Erstellen',primary:true,action:save}]});
+  setTimeout(()=>document.getElementById('aboFirma')?.focus(),50);
+}
+
+function editAbo(id){
+  const a=(state.abos||{})[id];if(!a)return;
+  const save=()=>{
+    const data=aboReadForm();
+    if(!aboPruefeForm(data))return;
+    db.ref('abos/'+id).update(data).catch(e=>showToast('Fehler: '+e.message,'error'));
+    closeModal();
+  };
+  const del=()=>{
+    if(!confirm('Service-Abo unwiderruflich löschen?'))return;
+    db.ref('abos/'+id).remove().catch(e=>showToast('Fehler: '+e.message,'error'));
+    closeModal();
+  };
+  showModal({title:'Service-Abo bearbeiten',content:aboFormContent(a),
+    actions:[{label:'Löschen',action:del,danger:true},{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:save}]});
+  setTimeout(()=>document.getElementById('aboFirma')?.focus(),50);
 }
 
 // ===== MODAL / CTX =====
