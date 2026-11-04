@@ -1654,8 +1654,19 @@ function knBekannteBaustellen(){
   });
   return Object.keys(zaehler).sort((a,b)=>zaehler[b]-zaehler[a]);
 }
+// Kalendertitel beginnen neu mit der Projektnummer: "03260686 - Feuz Markus".
+// Die Nummer gehört nicht in die Tagesplanung und darf auch nicht in den
+// Wortvergleich — sonst bliebe vom Titel am Ende nur noch sie selbst übrig.
+// Erkannt wird eine führende Zahl ab vier Stellen mit Trennzeichen, oder ab
+// sechs Stellen auch ohne. "3235 Erlach" bleibt damit unangetastet.
+function knOhneProjektnummer(titel){
+  const t=(titel||'').trim();
+  const ohne=t.replace(/^\d{4,}\s*[-–—:/]\s*/,'').replace(/^\d{6,}\s+/,'');
+  return ohne.trim()||t;
+}
 // "Apparatemontage und Leuchten Traube" -> "Traube", "St. Johannsen - GSA" -> "St. Johannsen"
-function knBaustelleAusTitel(titel,bekannt){
+function knBaustelleAusTitel(rohTitel,bekannt){
+  const titel=knOhneProjektnummer(rohTitel);
   const tk=new Set(knTokens(titel));
   let best=null,bestTreffer=0,bestScore=0;
   bekannt.forEach(name=>{
