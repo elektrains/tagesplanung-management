@@ -1638,10 +1638,16 @@ function knKalenderVorbelegen(){
 }
 
 // --- Baustellennamen erkennen ---
-const KN_STOPP=new Set(['und','mit','der','die','das','den','dem','ins','in','im','am','an','auf','bei','für','von','vom','zum','zur','neue','neuer','neues','div','diverse','std','ca','herr','frau']);
+const KN_STOPP=new Set(['und','mit','der','die','das','den','dem','in','im','am','an','auf','bei','für','von','vom','zum','zur','neue','neuer','neues','div','diverse','std','ca','herr','frau']);
+// Mindestlänge 2, nicht 3: sonst verliert "EW Ins Beleuchtung" das "EW" und fällt
+// im Vergleich auf das Allerweltswort "beleuchtung" zusammen — dann trifft der Name
+// jeden Titel mit "Beleuchtung" (am 24.11.2026 bei "Beleuchtung Tschugg Kontrolle"
+// passiert). "ins" steht aus demselben Grund nicht in KN_STOPP: Ins ist ein Dorf,
+// keine Präposition. Je mehr Wörter ein bekannter Name behält, desto grösser sein
+// Nenner im Score — und desto schwerer ein Zufallstreffer.
 function knTokens(s){
   return (s||'').toLowerCase().replace(/[.,;:/()\[\]{}"'`–—+-]+/g,' ').split(/\s+/)
-    .filter(w=>w.length>=3&&!KN_STOPP.has(w));
+    .filter(w=>w.length>=2&&!KN_STOPP.has(w));
 }
 // Baustellennamen, die in den letzten Plänen tatsächlich vorkamen
 function knBekannteBaustellen(){
@@ -1654,14 +1660,20 @@ function knBekannteBaustellen(){
   });
   return Object.keys(zaehler).sort((a,b)=>zaehler[b]-zaehler[a]);
 }
-// Kalendertitel beginnen neu mit der Projektnummer: "03260686 - Feuz Markus".
-// Die Nummer gehört nicht in die Tagesplanung und darf auch nicht in den
-// Wortvergleich — sonst bliebe vom Titel am Ende nur noch sie selbst übrig.
-// Erkannt wird eine führende Zahl ab vier Stellen mit Trennzeichen, oder ab
-// sechs Stellen auch ohne. "3235 Erlach" bleibt damit unangetastet.
+// Kalendertitel tragen die Projektnummer. Neu steht sie hinten ("Feuz - 03260686"),
+// vorher stand sie vorne ("03260686 - Feuz Markus") — beide Formen werden entfernt,
+// damit alte Einträge weiter stimmen. Die Nummer gehört nicht in die Tagesplanung und
+// darf auch nicht in den Wortvergleich, sonst verwässert sie den Namensabgleich.
+// Vorne: ab vier Stellen mit Trennzeichen, ab sechs Stellen auch ohne.
+// Hinten strenger, erst ab sechs Stellen — dort stehen oft Hausnummern und PLZ
+// ("Lagerhausstrasse 7", "Erlach 3235"), die stehen bleiben müssen.
 function knOhneProjektnummer(titel){
   const t=(titel||'').trim();
-  const ohne=t.replace(/^\d{4,}\s*[-–—:/]\s*/,'').replace(/^\d{6,}\s+/,'');
+  const ohne=t
+    .replace(/^\d{4,}\s*[-–—:/]\s*/,'')
+    .replace(/^\d{6,}\s+/,'')
+    .replace(/\s*[-–—:/]\s*\d{6,}$/,'')
+    .replace(/\s+\d{6,}$/,'');
   return ohne.trim()||t;
 }
 // "Apparatemontage und Leuchten Traube" -> "Traube", "St. Johannsen - GSA" -> "St. Johannsen"
