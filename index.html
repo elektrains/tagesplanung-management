@@ -2294,6 +2294,52 @@ function wsLoeschen(id){
 }
 
 
+// Fragen einer Mitteilung. Jede Frage behaelt ihre id, auch wenn der Text
+// spaeter geaendert wird — sonst verloeren bereits gegebene Antworten ihren
+// Bezug und die Auswertung auf dem Bildschirm waere Unsinn.
+function ibFelderVon(i){return Array.isArray(i&&i.felder)?i.felder:[];}
+function ibFeldZeile(f){
+  const id=(f&&f.id)?f.id:'f'+Date.now()+Math.floor(Math.random()*1000);
+  const typ=((f&&f.typ)==='auswahl')?'auswahl':'janein';
+  const opt=(f&&Array.isArray(f.optionen))?f.optionen.join(', '):'';
+  return `<div class="ib-feld" data-fid="${id}" style="display:flex;gap:6px;align-items:center;padding:5px 0">
+    <input class="modal-input ib-f-label" style="flex:2;padding:6px 10px;font-size:12px" placeholder="Frage, z.B. Partner kommt mit" value="${escHtml((f&&f.label)||'')}">
+    <select class="modal-input ib-f-typ" style="flex:1;padding:6px 10px;font-size:12px" onchange="ibTypGewechselt(this)">
+      <option value="janein"${typ==='janein'?' selected':''}>Ja / Nein</option>
+      <option value="auswahl"${typ==='auswahl'?' selected':''}>Auswahl</option>
+    </select>
+    <input class="modal-input ib-f-opt" style="flex:2;padding:6px 10px;font-size:12px;${typ==='auswahl'?'':'display:none'}" placeholder="Optionen mit Komma: Fr–So, Fr+Sa, nur Sa" value="${escHtml(opt)}">
+    <button class="btn-sm danger" onclick="this.parentNode.remove()">×</button>
+  </div>`;
+}
+function ibFelderFuellen(i){
+  const el=document.getElementById('ibFelder'); if(!el)return;
+  el.innerHTML=ibFelderVon(i).map(ibFeldZeile).join('');
+}
+function ibFeldHinzu(){
+  const el=document.getElementById('ibFelder'); if(!el)return;
+  el.insertAdjacentHTML('beforeend', ibFeldZeile(null));
+}
+function ibTypGewechselt(sel){
+  const opt=sel.parentNode.querySelector('.ib-f-opt');
+  opt.style.display = (sel.value==='auswahl') ? '' : 'none';
+}
+function ibFelderAuslesen(){
+  const el=document.getElementById('ibFelder'); if(!el)return [];
+  return [...el.querySelectorAll('.ib-feld')].map(r=>{
+    const label=r.querySelector('.ib-f-label').value.trim();
+    if(!label)return null;
+    const typ=r.querySelector('.ib-f-typ').value;
+    const f={id:r.dataset.fid,label,typ};
+    if(typ==='auswahl'){
+      const o=r.querySelector('.ib-f-opt').value.split(',').map(x=>x.trim()).filter(Boolean);
+      if(o.length<2)return null;   // eine einzige Option waere keine Frage
+      f.optionen=o;
+    }
+    return f;
+  }).filter(Boolean);
+}
+
 // ===== INFOBOARD =====
 // Mitteilungen fuer den Wandbildschirm: Weihnachtsessen, Betriebsausflug,
 // geaenderte Arbeitszeiten. Eine Mitteilung ist zunaechst nur Text; mit
@@ -2314,6 +2360,7 @@ function ibAbschnitt(){
         <div class="todo-title">${escHtml(i.titel||'')}${ab?' <span style="font-size:10px;color:var(--text3)">(abgelaufen, nicht mehr sichtbar)</span>':''}</div>
         ${i.text?`<div class="todo-desc">${escHtml(i.text)}</div>`:''}
         ${i.anmeldung?`<div class="todo-desc" style="margin-top:6px">${t.length} angemeldet${t.length?': '+t.map(escHtml).join(', '):''}</div>`:''}
+        ${ibFelderVon(i).length?`<div class="todo-desc" style="margin-top:4px;color:var(--text3)">Fragen: ${ibFelderVon(i).map(f=>escHtml(f.label)).join(' · ')}</div>`:''}
       </div>
       ${i.datum?`<span class="todo-due">${fmtDate(i.datum)}</span>`:''}
       ${i.bis?`<span class="todo-assignee">zeigen bis ${fmtDate(i.bis)}</span>`:''}
@@ -2348,7 +2395,11 @@ function ibFormular(i){
     <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;font-size:13px">
       <input type="checkbox" id="ibAnmeldung" ${an?'checked':''} style="width:16px;height:16px;cursor:pointer">
       Anmeldeliste anzeigen – Mitarbeiter tragen sich am Bildschirm selbst ein
-    </label>`;
+    </label>
+    <div style="margin-top:14px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Fragen zur Anmeldung</div>
+    <div style="font-size:11px;color:var(--text3);margin:2px 0 8px">Wer sich einträgt, beantwortet diese Fragen am Bildschirm. Ohne Fragen genügt das Antippen des Namens.</div>
+    <div id="ibFelder"></div>
+    <button class="btn-sm" style="margin-top:8px" onclick="ibFeldHinzu()">+ Frage</button>`;
 }
 function ibAuslesen(){
   const titel=document.getElementById('ibTitel').value.trim();
@@ -2357,7 +2408,8 @@ function ibAuslesen(){
     text:document.getElementById('ibText').value.trim(),
     datum:document.getElementById('ibDatum').value||'',
     bis:document.getElementById('ibBis').value||'',
-    anmeldung:document.getElementById('ibAnmeldung').checked};
+    anmeldung:document.getElementById('ibAnmeldung').checked,
+    felder:ibFelderAuslesen()};
 }
 function ibNeu(){
   showModal({title:'Neue Mitteilung',content:ibFormular(null),actions:[
@@ -2367,7 +2419,7 @@ function ibNeu(){
       db.ref('infoboard/ib'+Date.now()).set({...d,createdAt:Date.now()});
       closeModal();showToast('Mitteilung hinzugefuegt','success');
     }}]});
-  setTimeout(()=>document.getElementById('ibTitel')?.focus(),50);
+  setTimeout(()=>{ibFelderFuellen(null);document.getElementById('ibTitel')?.focus();},50);
 }
 function ibBearbeiten(id){
   const i=(state.infoboard||{})[id];if(!i)return;
@@ -2379,7 +2431,7 @@ function ibBearbeiten(id){
       db.ref('infoboard/'+id).update(d);
       closeModal();showToast('Gespeichert','success');
     }}]});
-  setTimeout(()=>document.getElementById('ibTitel')?.focus(),50);
+  setTimeout(()=>{ibFelderFuellen(i);document.getElementById('ibTitel')?.focus();},50);
 }
 function ibLoeschen(id){
   const i=(state.infoboard||{})[id];if(!i)return;
