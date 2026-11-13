@@ -362,6 +362,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
       <button class="nav-btn" onclick="setView('employees')">Mitarbeiter-Ansicht</button>
       <button class="nav-btn" onclick="setView('kontrollen')">Kontrollen<span class="nav-badge" id="navBadgeKn"></span></button>
       <button class="nav-btn" onclick="setView('abos')">Service-Abos<span class="nav-badge" id="navBadgeAbo"></span></button>
+      <button class="nav-btn" onclick="setView('werkstatt')">Werkstatt<span class="nav-badge" id="navBadgeWs"></span></button>
       <button class="nav-btn" onclick="setView('settings')">Einstellungen</button>
     </div>
     <div class="topbar-right">
@@ -454,6 +455,8 @@ let state = {
   knFilter: '',
   knSelected: {},
   abos: {},
+  werkstattAufgaben: {},
+  wsZeigeErledigte: false,
   aboView: 'aktiv',
   aboFilter: '',
   settings: {},
@@ -572,6 +575,11 @@ function setupListeners() {
     renderNavBadges();
     if (state.view === 'abos') renderAboView();
   });
+  db.ref('werkstattAufgaben').on('value', snap => {
+    state.werkstattAufgaben = snap.val() || {};
+    renderNavBadges();
+    if (state.view === 'werkstatt') renderWerkstattView();
+  });
   db.ref('meta').on('value', snap => {
     state.meta = snap.val() || {};
     if (state.view === 'settings') renderSettingsView();
@@ -653,8 +661,8 @@ function saveAsTemplate() {
   });
 }
 
-function setView(v){state.view=v;document.querySelectorAll('.nav-btn').forEach((b,i)=>b.classList.toggle('active',['plan','employees','kontrollen','abos','settings'][i]===v));render();}
-function render(){renderSidebar();renderNavBadges();if(state.view==='plan')renderPlanView();else if(state.view==='employees')renderEmployeeView();else if(state.view==='kontrollen')renderKontrollenView();else if(state.view==='abos')renderAboView();else renderSettingsView();}
+function setView(v){state.view=v;document.querySelectorAll('.nav-btn').forEach((b,i)=>b.classList.toggle('active',['plan','employees','kontrollen','abos','werkstatt','settings'][i]===v));render();}
+function render(){renderSidebar();renderNavBadges();if(state.view==='plan')renderPlanView();else if(state.view==='employees')renderEmployeeView();else if(state.view==='kontrollen')renderKontrollenView();else if(state.view==='abos')renderAboView();else if(state.view==='werkstatt')renderWerkstattView();else renderSettingsView();}
 
 function renderSidebar(){
   renderMiniCal();
@@ -1976,7 +1984,8 @@ function knOffeneAnzahl(){
 }
 function renderNavBadges(){
   [['navBadgeKn',knOffeneAnzahl(),'Kontrolle','Kontrollen'],
-   ['navBadgeAbo',aboOffeneAnzahl(),'Abo','Abos']].forEach(([id,n,ein,viele])=>{
+   ['navBadgeAbo',aboOffeneAnzahl(),'Abo','Abos'],
+   ['navBadgeWs',wsOffeneAnzahl(),'Aufgabe','Aufgaben']].forEach(([id,n,ein,viele])=>{
     const el=document.getElementById(id);if(!el)return;
     el.textContent=n>99?'99+':String(n);
     el.classList.toggle('on',n>0);
@@ -2158,6 +2167,120 @@ function editAbo(id){
   showModal({title:'Service-Abo bearbeiten',content:aboFormContent(a),
     actions:[{label:'Löschen',action:del,danger:true},{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:save}]});
   setTimeout(()=>document.getElementById('aboFirma')?.focus(),50);
+}
+
+
+// ===== WERKSTATT-AUFGABEN =====
+// Eigene Liste fuer den Wandbildschirm in der Werkstatt, bewusst getrennt
+// von der To-Do-Liste unter dem Tagesplan: dort stehen Projektaufgaben,
+// hier Hausarbeiten wie "Lager aufraeumen". Abgehakt wird am Bildschirm
+// (Dashboard-App), erfasst und entfernt wird hier.
+function wsListe(){
+  return Object.entries(state.werkstattAufgaben||{}).sort((a,b)=>{
+    const A=a[1],B=b[1];
+    if(!!A.erledigt!==!!B.erledigt)return A.erledigt?1:-1;
+    const at=A.termin||'9999-99-99',bt=B.termin||'9999-99-99';
+    if(at!==bt)return at<bt?-1:1;
+    return (A.createdAt||0)-(B.createdAt||0);
+  });
+}
+function wsUeberfaellig(a){const h=dateKey(new Date());return !a.erledigt&&!!a.termin&&a.termin<=h;}
+function wsOffeneAnzahl(){return Object.values(state.werkstattAufgaben||{}).filter(wsUeberfaellig).length;}
+function wsPersonen(a){return Array.isArray(a.zugewiesen)?a.zugewiesen:(a.zugewiesen?[a.zugewiesen]:[]);}
+
+function renderWerkstattView(){
+  const alle=wsListe();
+  const liste=state.wsZeigeErledigte?alle:alle.filter(([,a])=>!a.erledigt);
+  const erledigt=alle.filter(([,a])=>a.erledigt).length;
+  const rows=liste.map(([id,a])=>{
+    const ueber=wsUeberfaellig(a);
+    const pers=wsPersonen(a);
+    return `<div class="todo-item${ueber?' overdue':''}" style="${a.erledigt?'opacity:.5':''}">
+      <div class="todo-check" style="${a.erledigt?'background:var(--green);border-color:var(--green)':''}" onclick="wsUmschalten('${id}')" title="${a.erledigt?'Wieder oeffnen':'Als erledigt markieren'}"></div>
+      <div class="todo-body" onclick="wsBearbeiten('${id}')">
+        <div class="todo-title" style="${a.erledigt?'text-decoration:line-through':''}">${escHtml(a.titel||'')}</div>
+        ${a.beschreibung?`<div class="todo-desc">${escHtml(a.beschreibung)}</div>`:''}
+      </div>
+      ${a.termin?`<span class="todo-due">bis ${fmtDate(a.termin)}</span>`:''}
+      ${pers.map(p=>`<span class="todo-assignee">${escHtml(p)}</span>`).join('')}
+      <button class="btn-sm danger" onclick="wsLoeschen('${id}')">Entfernen</button>
+    </div>`;
+  }).join('');
+  document.getElementById('mainContent').innerHTML=`<div class="settings-wrap">
+    <h2 style="font-size:16px;font-weight:700;margin-bottom:4px">Werkstatt-Aufgaben</h2>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:20px">Erscheinen auf dem Wandbildschirm in der Werkstatt und werden dort abgehakt.</p>
+    <div class="settings-section">
+      <div class="settings-section-title">
+        ${liste.length} ${liste.length===1?'Aufgabe':'Aufgaben'}
+        ${erledigt?`<button class="btn-sm" style="float:right" onclick="wsErledigteUmschalten()">${state.wsZeigeErledigte?'Erledigte ausblenden':'Erledigte zeigen ('+erledigt+')'}</button>`:''}
+      </div>
+      ${rows||'<div style="color:var(--text3);font-size:12px;padding:10px 0">Noch keine Aufgaben erfasst.</div>'}
+      <button class="btn-add" onclick="wsNeu()">+ Aufgabe hinzufuegen</button>
+    </div>
+  </div>`;
+}
+function wsErledigteUmschalten(){state.wsZeigeErledigte=!state.wsZeigeErledigte;renderWerkstattView();}
+
+// Mehrfachauswahl: jeder Name ist ein Schalter. Pro Aufgabe koennen
+// beliebig viele Mitarbeiter zugewiesen sein.
+function wsFormular(a){
+  const sel=wsPersonen(a||{});
+  const emps=state.employees.filter(e=>!isHiddenEmp(e));
+  return `<input class="modal-input" id="wsTitel" placeholder="Aufgabe, z.B. Lager aufraeumen" value="${escHtml((a&&a.titel)||'')}">
+    <textarea class="modal-input" id="wsBeschreibung" placeholder="Beschreibung (optional)" rows="2" style="margin-top:8px;resize:vertical">${escHtml((a&&a.beschreibung)||'')}</textarea>
+    <div style="margin-top:10px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Termin</div>
+    <input class="modal-input" id="wsTermin" type="date" style="margin-top:4px" value="${(a&&a.termin)||''}">
+    <div style="margin-top:12px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Zugewiesen (Mehrfachauswahl)</div>
+    <div class="vehicle-grid" id="wsPersonenGrid" style="grid-template-columns:repeat(3,1fr);max-height:200px">
+      ${emps.map(e=>`<div class="vehicle-opt${sel.includes(e)?' sel':''}" data-name="${escHtml(e)}" onclick="this.classList.toggle('sel')">${escHtml(e)}</div>`).join('')}
+    </div>`;
+}
+function wsAuslesen(){
+  const titel=document.getElementById('wsTitel').value.trim();
+  if(!titel)return null;
+  return {
+    titel,
+    beschreibung:document.getElementById('wsBeschreibung').value.trim(),
+    termin:document.getElementById('wsTermin').value||'',
+    zugewiesen:Array.from(document.querySelectorAll('#wsPersonenGrid .vehicle-opt.sel')).map(el=>el.dataset.name)
+  };
+}
+function wsNeu(){
+  showModal({title:'Neue Werkstatt-Aufgabe',content:wsFormular(null),actions:[
+    {label:'Abbrechen',cancel:true},
+    {label:'Hinzufuegen',primary:true,action:()=>{
+      const d=wsAuslesen();if(!d)return;
+      const id='ws'+Date.now();
+      db.ref('werkstattAufgaben/'+id).set({...d,erledigt:false,erledigtAm:null,createdAt:Date.now()});
+      closeModal();showToast('Aufgabe hinzugefuegt','success');
+    }}]});
+  setTimeout(()=>document.getElementById('wsTitel')?.focus(),50);
+}
+function wsBearbeiten(id){
+  const a=(state.werkstattAufgaben||{})[id];if(!a)return;
+  showModal({title:'Aufgabe bearbeiten',content:wsFormular(a),actions:[
+    {label:'Entfernen',danger:true,action:()=>wsLoeschen(id)},
+    {label:'Abbrechen',cancel:true},
+    {label:'Speichern',primary:true,action:()=>{
+      const d=wsAuslesen();if(!d)return;
+      db.ref('werkstattAufgaben/'+id).update(d);
+      closeModal();showToast('Gespeichert','success');
+    }}]});
+  setTimeout(()=>document.getElementById('wsTitel')?.focus(),50);
+}
+// Abhaken geht hier wie am Bildschirm in beide Richtungen.
+function wsUmschalten(id){
+  const a=(state.werkstattAufgaben||{})[id];if(!a)return;
+  const neu=!a.erledigt;
+  db.ref('werkstattAufgaben/'+id).update({erledigt:neu,erledigtAm:neu?Date.now():null});
+}
+function wsLoeschen(id){
+  const a=(state.werkstattAufgaben||{})[id];if(!a)return;
+  showModal({title:'Aufgabe entfernen',
+    content:`<p style="color:var(--text2)">Soll <strong>${escHtml(a.titel||'')}</strong> endgueltig entfernt werden?</p>`,
+    actions:[{label:'Abbrechen',cancel:true},{label:'Entfernen',danger:true,action:()=>{
+      db.ref('werkstattAufgaben/'+id).remove();closeModal();showToast('Entfernt','success');
+    }}]});
 }
 
 // ===== MODAL / CTX =====
