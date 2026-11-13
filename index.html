@@ -597,7 +597,7 @@ function setupListeners() {
 
 // ===== INIT =====
 function startApp(user) {
-  state.myName = user.displayName || user.email.split('@')[0];
+  state.myName = user.displayName || (user.email || '').split('@')[0] || 'Unbekannt';
   document.getElementById('loader').style.display    = 'none';
   document.getElementById('loginOverlay').style.display = 'none';
   document.getElementById('appShell').style.display  = 'grid';
@@ -607,7 +607,11 @@ function startApp(user) {
 }
 
 auth.onAuthStateChanged(user => {
-  if (user) {
+  // Das Werkstatt-Dashboard liegt auf derselben Adresse und meldet sich dort
+  // anonym an. Firebase legt die Anmeldung pro Herkunft ab, also sieht diese
+  // App die anonyme Sitzung des Dashboards. Projektleiter melden sich hier
+  // mit Passwort an, eine anonyme Sitzung ist also kein Login.
+  if (user && !user.isAnonymous) {
     startApp(user);
   } else {
     document.getElementById('loader').style.display    = 'none';
