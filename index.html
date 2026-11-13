@@ -2360,6 +2360,109 @@ function fmtZeitraum(i){
 function ibAbgelaufen(i){const h=dateKey(new Date());return !!i.bis && i.bis < h;}
 function ibTeilnehmer(i){return Object.keys(i.teilnehmer||{});}
 
+// ----- Auswertung einer Mitteilung -----
+// Der Wandbildschirm legt Teilnehmer unter einem bereinigten Namen ab, weil
+// Firebase-Schluessel . $ # [ ] / nicht enthalten duerfen. Fuer den Vergleich
+// mit der Mitarbeiterliste muss hier dieselbe Bereinigung laufen.
+function ibSchluessel(name){return String(name).replace(/[.$#\[\]\/]/g,'_');}
+function ibTnDaten(i,name){
+  const v=(i.teilnehmer||{})[ibSchluessel(name)];
+  if(v==null)return null;
+  if(typeof v==='number')return {ts:v,antworten:{}};   // Eintraege aus der Zeit vor den Fragen
+  return {ts:v.ts||0,antworten:v.antworten||{}};
+}
+function ibAktive(){
+  const k=dateKey(new Date());
+  return (state.employees||[]).filter(e=>!(state.inactiveEmployees||[]).includes(e)
+    && !isArchivedAsOf(e,k) && !isNotYetStartedAsOf(e,k));
+}
+function ibZeit(ts){
+  if(!ts)return '';
+  const d=new Date(ts), z=x=>String(x).padStart(2,'0');
+  return z(d.getDate())+'.'+z(d.getMonth()+1)+'.'+d.getFullYear()+' '+z(d.getHours())+':'+z(d.getMinutes());
+}
+// Teilnehmer in der Reihenfolge der Mitarbeiterliste, danach Namen, die es in
+// der Liste nicht mehr gibt - etwa Ausgetretene, die sich eingetragen hatten.
+function ibTeilnehmerSortiert(i){
+  const aktive=ibAktive();
+  return aktive.filter(e=>ibTnDaten(i,e))
+    .concat(Object.keys(i.teilnehmer||{}).filter(k=>!aktive.some(e=>ibSchluessel(e)===k)));
+}
+// Fuer die Bestellung zaehlt die Summe: wie viele mit Partner, wie viele Abos.
+function ibZaehlung(i){
+  return ibFelderVon(i).map(f=>{
+    const z={};
+    Object.values(i.teilnehmer||{}).forEach(v=>{
+      const a=(v&&typeof v==='object'&&v.antworten)?v.antworten[f.id]:null;
+      if(a)z[a]=(z[a]||0)+1;
+    });
+    return {label:f.label,teile:Object.entries(z).map(([k,c])=>k+' '+c)};
+  });
+}
+// CSV mit Semikolon und BOM: so oeffnet Excel die Datei ohne Nachfragen
+// richtig, auch mit Umlauten.
+function ibCsvZelle(x){return '"'+String(x==null?'':x).replace(/"/g,'""')+'"';}
+function ibCsvText(i){
+  const felder=ibFelderVon(i), aktive=ibAktive(), drin=ibTeilnehmerSortiert(i);
+  const fehlen=aktive.filter(e=>!ibTnDaten(i,e));
+  const z=[];
+  z.push([(i.titel||'Mitteilung')+' – Auswertung vom '+ibZeit(Date.now())]);
+  if(i.datum)z.push(['Termin',fmtZeitraum(i)]);
+  z.push([]);
+  z.push(['Name','Eingetragen am'].concat(felder.map(f=>f.label)));
+  drin.forEach(nm=>{
+    const d=ibTnDaten(i,nm)||{ts:0,antworten:{}};
+    z.push([nm,ibZeit(d.ts)].concat(felder.map(f=>d.antworten[f.id]||'')));
+  });
+  z.push([]);
+  z.push(['Zusammenfassung']);
+  z.push(['Angemeldet',drin.length+' von '+aktive.length]);
+  ibZaehlung(i).forEach(x=>{if(x.teile.length)z.push([x.label].concat(x.teile));});
+  if(fehlen.length)z.push(['Nicht angemeldet',fehlen.join(', ')]);
+  return z.map(r=>r.map(ibCsvZelle).join(';')).join('\r\n');
+}
+function ibCsvLaden(id){
+  const i=(state.infoboard||{})[id]; if(!i)return;
+  const roh=(i.titel||'Mitteilung').replace(/[^\wÄÖÜäöüàéèç -]/g,'').trim()||'Mitteilung';
+  const blob=new Blob(['﻿'+ibCsvText(i)],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=roh+' Auswertung '+dateKey(new Date())+'.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},0);
+  showToast('Auswertung heruntergeladen','success');
+}
+function ibAuswertung(id){
+  const i=(state.infoboard||{})[id]; if(!i)return;
+  const felder=ibFelderVon(i), aktive=ibAktive(), drin=ibTeilnehmerSortiert(i);
+  const fehlen=aktive.filter(e=>!ibTnDaten(i,e));
+  const th='text-align:left;padding:5px 6px;border-bottom:1px solid var(--border2);font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);white-space:nowrap';
+  const td='padding:5px 6px;border-bottom:1px solid var(--border);white-space:nowrap';
+  let tab='<tr><th style="'+th+'">Name</th>';
+  felder.forEach(f=>{tab+='<th style="'+th+'">'+escHtml(f.label)+'</th>';});
+  tab+='<th style="'+th+'">Eingetragen</th></tr>';
+  drin.forEach(nm=>{
+    const d=ibTnDaten(i,nm)||{ts:0,antworten:{}};
+    tab+='<tr><td style="'+td+'"><strong>'+escHtml(nm)+'</strong></td>';
+    felder.forEach(f=>{tab+='<td style="'+td+'">'+escHtml(d.antworten[f.id]||'–')+'</td>';});
+    tab+='<td style="'+td+';color:var(--text3);font-size:11px">'+ibZeit(d.ts)+'</td></tr>';
+  });
+  let summe='';
+  ibZaehlung(i).forEach(x=>{
+    if(x.teile.length)summe+='<div style="margin-top:4px"><span style="color:var(--text3)">'+escHtml(x.label)+':</span> <strong>'+escHtml(x.teile.join(' · '))+'</strong></div>';
+  });
+  let c='<div style="font-size:12px;color:var(--text2);margin-bottom:10px">'
+    +(i.datum?fmtZeitraum(i)+' · ':'')+'<strong>'+drin.length+'</strong> von '+aktive.length+' angemeldet</div>';
+  c+= drin.length
+    ? '<div style="overflow-x:auto;margin-bottom:12px"><table style="width:100%;border-collapse:collapse;font-size:12px">'+tab+'</table></div>'
+    : '<div style="color:var(--text3);font-size:12px;padding:8px 0">Noch niemand eingetragen.</div>';
+  if(summe)c+='<div style="font-size:12px;padding:10px 0;border-top:1px solid var(--border2)">'+summe+'</div>';
+  if(fehlen.length)c+='<div style="font-size:11px;color:var(--text3);margin-top:8px">Fehlen noch: '+fehlen.map(escHtml).join(', ')+'</div>';
+  showModal({title:'Auswertung – '+escHtml(i.titel||''),content:c,actions:[
+    {label:'Schliessen',cancel:true},
+    {label:'CSV herunterladen',primary:true,action:()=>ibCsvLaden(id)}]});
+}
+
 function ibAbschnitt(){
   const liste=ibListe();
   const rows=liste.map(([id,i])=>{
@@ -2374,6 +2477,7 @@ function ibAbschnitt(){
       ${i.datum?`<span class="todo-due">${fmtZeitraum(i)}</span>`:''}
       ${i.bis?`<span class="todo-assignee">zeigen bis ${fmtDate(i.bis)}</span>`:''}
       ${i.anmeldung?'<span class="todo-assignee">Anmeldung</span>':''}
+      ${(i.anmeldung||ibFelderVon(i).length)?`<button class="btn-sm" onclick="ibAuswertung('${id}')">Auswertung</button>`:''}
       <button class="btn-sm danger" onclick="ibLoeschen('${id}')">Entfernen</button>
     </div>`;
   }).join('');
