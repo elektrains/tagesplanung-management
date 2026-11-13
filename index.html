@@ -456,6 +456,7 @@ let state = {
   knSelected: {},
   abos: {},
   werkstattAufgaben: {},
+  infoboard: {},
   wsZeigeErledigte: false,
   aboView: 'aktiv',
   aboFilter: '',
@@ -578,6 +579,10 @@ function setupListeners() {
   db.ref('werkstattAufgaben').on('value', snap => {
     state.werkstattAufgaben = snap.val() || {};
     renderNavBadges();
+    if (state.view === 'werkstatt') renderWerkstattView();
+  });
+  db.ref('infoboard').on('value', snap => {
+    state.infoboard = snap.val() || {};
     if (state.view === 'werkstatt') renderWerkstattView();
   });
   db.ref('meta').on('value', snap => {
@@ -2217,6 +2222,7 @@ function renderWerkstattView(){
       ${rows||'<div style="color:var(--text3);font-size:12px;padding:10px 0">Noch keine Aufgaben erfasst.</div>'}
       <button class="btn-add" onclick="wsNeu()">+ Aufgabe hinzufuegen</button>
     </div>
+    ${ibAbschnitt()}
   </div>`;
 }
 function wsErledigteUmschalten(){state.wsZeigeErledigte=!state.wsZeigeErledigte;renderWerkstattView();}
@@ -2280,6 +2286,104 @@ function wsLoeschen(id){
     content:`<p style="color:var(--text2)">Soll <strong>${escHtml(a.titel||'')}</strong> endgueltig entfernt werden?</p>`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Entfernen',danger:true,action:()=>{
       db.ref('werkstattAufgaben/'+id).remove();closeModal();showToast('Entfernt','success');
+    }}]});
+}
+
+
+// ===== INFOBOARD =====
+// Mitteilungen fuer den Wandbildschirm: Weihnachtsessen, Betriebsausflug,
+// geaenderte Arbeitszeiten. Eine Mitteilung ist zunaechst nur Text; mit
+// "anmeldung" kommt eine Namensliste dazu, in die sich die Mitarbeiter am
+// Bildschirm selbst eintragen. Die Namen werden hier nur angezeigt.
+function ibListe(){
+  return Object.entries(state.infoboard||{}).sort((a,b)=>(a[1].createdAt||0)-(b[1].createdAt||0));
+}
+function ibAbgelaufen(i){const h=dateKey(new Date());return !!i.bis && i.bis < h;}
+function ibTeilnehmer(i){return Object.keys(i.teilnehmer||{});}
+
+function ibAbschnitt(){
+  const liste=ibListe();
+  const rows=liste.map(([id,i])=>{
+    const t=ibTeilnehmer(i), ab=ibAbgelaufen(i);
+    return `<div class="todo-item" style="${ab?'opacity:.45':''}">
+      <div class="todo-body" onclick="ibBearbeiten('${id}')">
+        <div class="todo-title">${escHtml(i.titel||'')}${ab?' <span style="font-size:10px;color:var(--text3)">(abgelaufen, nicht mehr sichtbar)</span>':''}</div>
+        ${i.text?`<div class="todo-desc">${escHtml(i.text)}</div>`:''}
+        ${i.anmeldung?`<div class="todo-desc" style="margin-top:6px">${t.length} angemeldet${t.length?': '+t.map(escHtml).join(', '):''}</div>`:''}
+      </div>
+      ${i.datum?`<span class="todo-due">${fmtDate(i.datum)}</span>`:''}
+      ${i.bis?`<span class="todo-assignee">zeigen bis ${fmtDate(i.bis)}</span>`:''}
+      ${i.anmeldung?'<span class="todo-assignee">Anmeldung</span>':''}
+      <button class="btn-sm danger" onclick="ibLoeschen('${id}')">Entfernen</button>
+    </div>`;
+  }).join('');
+  return `<div class="settings-section">
+    <div class="settings-section-title">Infoboard (${liste.length})
+      <span style="font-size:11px;font-weight:400;color:var(--text3)">– erscheint unter den Aufgaben auf dem Wandbildschirm</span>
+    </div>
+    ${rows||'<div style="color:var(--text3);font-size:12px;padding:10px 0">Noch keine Mitteilung erfasst.</div>'}
+    <button class="btn-add" onclick="ibNeu()">+ Mitteilung hinzufuegen</button>
+  </div>`;
+}
+
+function ibFormular(i){
+  const an=!!(i&&i.anmeldung);
+  return `<input class="modal-input" id="ibTitel" placeholder="Titel, z.B. Weihnachtsessen" value="${escHtml((i&&i.titel)||'')}">
+    <textarea class="modal-input" id="ibText" placeholder="Text (optional)" rows="3" style="margin-top:8px;resize:vertical">${escHtml((i&&i.text)||'')}</textarea>
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Datum des Anlasses</div>
+        <input class="modal-input" id="ibDatum" type="date" style="margin-top:4px" value="${(i&&i.datum)||''}">
+      </div>
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Anzeigen bis</div>
+        <input class="modal-input" id="ibBis" type="date" style="margin-top:4px" value="${(i&&i.bis)||''}">
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:4px">Ohne "Anzeigen bis" bleibt die Mitteilung stehen, bis sie entfernt wird.</div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;font-size:13px">
+      <input type="checkbox" id="ibAnmeldung" ${an?'checked':''} style="width:16px;height:16px;cursor:pointer">
+      Anmeldeliste anzeigen – Mitarbeiter tragen sich am Bildschirm selbst ein
+    </label>`;
+}
+function ibAuslesen(){
+  const titel=document.getElementById('ibTitel').value.trim();
+  if(!titel)return null;
+  return {titel,
+    text:document.getElementById('ibText').value.trim(),
+    datum:document.getElementById('ibDatum').value||'',
+    bis:document.getElementById('ibBis').value||'',
+    anmeldung:document.getElementById('ibAnmeldung').checked};
+}
+function ibNeu(){
+  showModal({title:'Neue Mitteilung',content:ibFormular(null),actions:[
+    {label:'Abbrechen',cancel:true},
+    {label:'Hinzufuegen',primary:true,action:()=>{
+      const d=ibAuslesen();if(!d)return;
+      db.ref('infoboard/ib'+Date.now()).set({...d,createdAt:Date.now()});
+      closeModal();showToast('Mitteilung hinzugefuegt','success');
+    }}]});
+  setTimeout(()=>document.getElementById('ibTitel')?.focus(),50);
+}
+function ibBearbeiten(id){
+  const i=(state.infoboard||{})[id];if(!i)return;
+  showModal({title:'Mitteilung bearbeiten',content:ibFormular(i),actions:[
+    {label:'Entfernen',danger:true,action:()=>ibLoeschen(id)},
+    {label:'Abbrechen',cancel:true},
+    {label:'Speichern',primary:true,action:()=>{
+      const d=ibAuslesen();if(!d)return;
+      db.ref('infoboard/'+id).update(d);
+      closeModal();showToast('Gespeichert','success');
+    }}]});
+  setTimeout(()=>document.getElementById('ibTitel')?.focus(),50);
+}
+function ibLoeschen(id){
+  const i=(state.infoboard||{})[id];if(!i)return;
+  const t=ibTeilnehmer(i);
+  showModal({title:'Mitteilung entfernen',
+    content:`<p style="color:var(--text2)">Soll <strong>${escHtml(i.titel||'')}</strong> entfernt werden?${t.length?' <br><br>Die '+t.length+' Anmeldungen gehen dabei verloren.':''}</p>`,
+    actions:[{label:'Abbrechen',cancel:true},{label:'Entfernen',danger:true,action:()=>{
+      db.ref('infoboard/'+id).remove();closeModal();showToast('Entfernt','success');
     }}]});
 }
 
