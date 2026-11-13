@@ -2319,6 +2319,7 @@ function ibFelderFuellen(i){
 function ibFeldHinzu(){
   const el=document.getElementById('ibFelder'); if(!el)return;
   el.insertAdjacentHTML('beforeend', ibFeldZeile(null));
+  const h=document.getElementById('ibAnmeldung'); if(h) h.checked=true;   // sonst bleibt die Frage unerreichbar
 }
 function ibTypGewechselt(sel){
   const opt=sel.parentNode.querySelector('.ib-f-opt');
@@ -2348,6 +2349,14 @@ function ibFelderAuslesen(){
 function ibListe(){
   return Object.entries(state.infoboard||{}).sort((a,b)=>(a[1].createdAt||0)-(b[1].createdAt||0));
 }
+// "12.03.2027 – 14.03.2027", bei gleichem Monat kurz als "12.–14.03.2027"
+function fmtZeitraum(i){
+  const a=(i&&i.datum)||'', b=(i&&i.datumBis)||'';
+  if(!a)return fmtDate(b);
+  if(!b||b<=a)return fmtDate(a);
+  const [ya,ma,da]=a.split('-'), [yb,mb]=b.split('-');
+  return (ya===yb&&ma===mb) ? da+'.–'+fmtDate(b) : fmtDate(a)+' – '+fmtDate(b);
+}
 function ibAbgelaufen(i){const h=dateKey(new Date());return !!i.bis && i.bis < h;}
 function ibTeilnehmer(i){return Object.keys(i.teilnehmer||{});}
 
@@ -2362,7 +2371,7 @@ function ibAbschnitt(){
         ${i.anmeldung?`<div class="todo-desc" style="margin-top:6px">${t.length} angemeldet${t.length?': '+t.map(escHtml).join(', '):''}</div>`:''}
         ${ibFelderVon(i).length?`<div class="todo-desc" style="margin-top:4px;color:var(--text3)">Fragen: ${ibFelderVon(i).map(f=>escHtml(f.label)).join(' · ')}</div>`:''}
       </div>
-      ${i.datum?`<span class="todo-due">${fmtDate(i.datum)}</span>`:''}
+      ${i.datum?`<span class="todo-due">${fmtZeitraum(i)}</span>`:''}
       ${i.bis?`<span class="todo-assignee">zeigen bis ${fmtDate(i.bis)}</span>`:''}
       ${i.anmeldung?'<span class="todo-assignee">Anmeldung</span>':''}
       <button class="btn-sm danger" onclick="ibLoeschen('${id}')">Entfernen</button>
@@ -2383,13 +2392,21 @@ function ibFormular(i){
     <textarea class="modal-input" id="ibText" placeholder="Text (optional)" rows="3" style="margin-top:8px;resize:vertical">${escHtml((i&&i.text)||'')}</textarea>
     <div style="display:flex;gap:10px;margin-top:10px">
       <div style="flex:1">
-        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Datum des Anlasses</div>
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Termin von</div>
         <input class="modal-input" id="ibDatum" type="date" style="margin-top:4px" value="${(i&&i.datum)||''}">
       </div>
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">bis (optional)</div>
+        <input class="modal-input" id="ibDatumBis" type="date" style="margin-top:4px" value="${(i&&i.datumBis)||''}">
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:4px">Dauert der Anlass mehrere Tage, das Enddatum eintragen – auf dem Wandbildschirm steht dann z.B. "12.–14.03.2027".</div>
+    <div style="display:flex;gap:10px;margin-top:10px">
       <div style="flex:1">
         <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Anzeigen bis</div>
         <input class="modal-input" id="ibBis" type="date" style="margin-top:4px" value="${(i&&i.bis)||''}">
       </div>
+      <div style="flex:1"></div>
     </div>
     <div style="font-size:11px;color:var(--text3);margin-top:4px">Ohne "Anzeigen bis" bleibt die Mitteilung stehen, bis sie entfernt wird.</div>
     <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;font-size:13px">
@@ -2404,12 +2421,16 @@ function ibFormular(i){
 function ibAuslesen(){
   const titel=document.getElementById('ibTitel').value.trim();
   if(!titel)return null;
+  const felder=ibFelderAuslesen();
   return {titel,
     text:document.getElementById('ibText').value.trim(),
     datum:document.getElementById('ibDatum').value||'',
+    datumBis:document.getElementById('ibDatumBis').value||'',
     bis:document.getElementById('ibBis').value||'',
-    anmeldung:document.getElementById('ibAnmeldung').checked,
-    felder:ibFelderAuslesen()};
+    // Fragen ohne Anmeldeliste waeren unbeantwortbar: niemand koennte sie
+    // am Bildschirm aufrufen. Darum zieht eine Frage die Liste mit sich.
+    anmeldung:document.getElementById('ibAnmeldung').checked||felder.length>0,
+    felder};
 }
 function ibNeu(){
   showModal({title:'Neue Mitteilung',content:ibFormular(null),actions:[
