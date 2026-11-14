@@ -457,6 +457,7 @@ let state = {
   abos: {},
   werkstattAufgaben: {},
   infoboard: {},
+  aemter: {},
   wsZeigeErledigte: false,
   aboView: 'aktiv',
   aboFilter: '',
@@ -583,6 +584,10 @@ function setupListeners() {
   });
   db.ref('infoboard').on('value', snap => {
     state.infoboard = snap.val() || {};
+    if (state.view === 'werkstatt') renderWerkstattView();
+  });
+  db.ref('aemter').on('value', snap => {
+    state.aemter = snap.val() || {};
     if (state.view === 'werkstatt') renderWerkstattView();
   });
   db.ref('meta').on('value', snap => {
@@ -2227,6 +2232,7 @@ function renderWerkstattView(){
       <button class="btn-add" onclick="wsNeu()">+ Aufgabe hinzufuegen</button>
     </div>
     ${ibAbschnitt()}
+    ${amAbschnitt()}
   </div>`;
 }
 function wsErledigteUmschalten(){state.wsZeigeErledigte=!state.wsZeigeErledigte;renderWerkstattView();}
@@ -2339,6 +2345,113 @@ function ibFelderAuslesen(){
     }
     return f;
   }).filter(Boolean);
+}
+
+// ===== AEMTLI =====
+// Wiederkehrende Posten: Montagmorgen Container hinstellen, Freitagnachmittag
+// Lager reinigen. Anders als die Werkstatt-Aufgaben werden sie nicht abgehakt,
+// sie gelten jede Woche neu - darum tragen sie einen Wochentag statt eines
+// Termins und einen Stellvertreter fuer den Fall der Abwesenheit.
+const AM_TAGE=[['mo','Montag'],['di','Dienstag'],['mi','Mittwoch'],['do','Donnerstag'],
+               ['fr','Freitag'],['sa','Samstag'],['so','Sonntag'],['','Kein fester Tag']];
+function amListe(){
+  const rang=k=>{const i=AM_TAGE.findIndex(x=>x[0]===(k||''));return i<0?99:i;};
+  return Object.entries(state.aemter||{}).sort((a,b)=>
+    rang(a[1].tag)-rang(b[1].tag) || (a[1].createdAt||0)-(b[1].createdAt||0));
+}
+function amTagName(k){const t=AM_TAGE.find(x=>x[0]===(k||''));return t?t[1]:'';}
+
+function amAbschnitt(){
+  const liste=amListe();
+  const rows=liste.map(([id,a])=>`<div class="todo-item">
+      <div class="todo-body" onclick="amBearbeiten('${id}')">
+        <div class="todo-title">${escHtml(a.titel||'')}</div>
+        <div class="todo-desc">${escHtml(amTagName(a.tag))}${a.zeit?' · '+escHtml(a.zeit):''}</div>
+      </div>
+      ${a.verantwortlich?`<span class="todo-assignee">${escHtml(a.verantwortlich)}</span>`:''}
+      ${a.stv?`<span class="todo-assignee">Stv. ${escHtml(a.stv)}</span>`:''}
+      <button class="btn-sm danger" onclick="amLoeschen('${id}')">Entfernen</button>
+    </div>`).join('');
+  return `<div class="settings-section">
+    <div class="settings-section-title">Ämtli (${liste.length})
+      <span style="font-size:11px;font-weight:400;color:var(--text3)">– wiederkehrende Posten; am Wandbildschirm steht oben, was heute ansteht</span>
+    </div>
+    ${rows||'<div style="color:var(--text3);font-size:12px;padding:10px 0">Noch kein Ämtli erfasst.</div>'}
+    <button class="btn-add" onclick="amNeu()">+ Ämtli hinzufuegen</button>
+  </div>`;
+}
+
+function amPersonFeld(id,wert,leer){
+  const emps=state.employees.filter(e=>!isHiddenEmp(e));
+  return `<select class="modal-input" id="${id}" style="margin-top:4px">
+    <option value="">${leer}</option>
+    ${emps.map(e=>`<option${e===wert?' selected':''}>${escHtml(e)}</option>`).join('')}
+  </select>`;
+}
+function amFormular(a){
+  const LAB='style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700"';
+  return `<input class="modal-input" id="amTitel" placeholder="Ämtli, z.B. Container hinstellen" value="${escHtml((a&&a.titel)||'')}">
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <div style="flex:1">
+        <div ${LAB}>Wochentag</div>
+        <select class="modal-input" id="amTag" style="margin-top:4px">
+          ${AM_TAGE.map(([k,n])=>`<option value="${k}"${(a&&(a.tag||''))===k?' selected':''}>${n}</option>`).join('')}
+        </select>
+      </div>
+      <div style="flex:1">
+        <div ${LAB}>Wann genau (optional)</div>
+        <input class="modal-input" id="amZeit" style="margin-top:4px" placeholder="morgens, nach Feierabend" value="${escHtml((a&&a.zeit)||'')}">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <div style="flex:1">
+        <div ${LAB}>Verantwortlich</div>
+        ${amPersonFeld('amVer',(a&&a.verantwortlich)||'','– niemand –')}
+      </div>
+      <div style="flex:1">
+        <div ${LAB}>Stellvertreter</div>
+        ${amPersonFeld('amStv',(a&&a.stv)||'','– keiner –')}
+      </div>
+    </div>`;
+}
+function amAuslesen(){
+  const titel=document.getElementById('amTitel').value.trim();
+  if(!titel)return null;
+  return {titel,
+    tag:document.getElementById('amTag').value||'',
+    zeit:document.getElementById('amZeit').value.trim(),
+    verantwortlich:document.getElementById('amVer').value||'',
+    stv:document.getElementById('amStv').value||''};
+}
+function amNeu(){
+  showModal({title:'Neues Ämtli',content:amFormular(null),actions:[
+    {label:'Abbrechen',cancel:true},
+    {label:'Hinzufuegen',primary:true,action:()=>{
+      const d=amAuslesen();if(!d)return;
+      db.ref('aemter/am'+Date.now()).set({...d,createdAt:Date.now()});
+      closeModal();showToast('Ämtli hinzugefuegt','success');
+    }}]});
+  setTimeout(()=>document.getElementById('amTitel')?.focus(),50);
+}
+function amBearbeiten(id){
+  const a=(state.aemter||{})[id];if(!a)return;
+  showModal({title:'Ämtli bearbeiten',content:amFormular(a),actions:[
+    {label:'Entfernen',danger:true,action:()=>amLoeschen(id)},
+    {label:'Abbrechen',cancel:true},
+    {label:'Speichern',primary:true,action:()=>{
+      const d=amAuslesen();if(!d)return;
+      db.ref('aemter/'+id).update(d);
+      closeModal();showToast('Gespeichert','success');
+    }}]});
+  setTimeout(()=>document.getElementById('amTitel')?.focus(),50);
+}
+function amLoeschen(id){
+  const a=(state.aemter||{})[id];if(!a)return;
+  showModal({title:'Ämtli entfernen',
+    content:`<p style="color:var(--text2)">Soll <strong>${escHtml(a.titel||'')}</strong> entfernt werden?</p>`,
+    actions:[{label:'Abbrechen',cancel:true},{label:'Entfernen',danger:true,action:()=>{
+      db.ref('aemter/'+id).remove();closeModal();showToast('Entfernt','success');
+    }}]});
 }
 
 // ===== INFOBOARD =====
