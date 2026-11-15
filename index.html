@@ -476,7 +476,8 @@ let state = {
   kalenderStatusOnly: ['Timo','Christoph'],
   myId: 'user_' + Math.random().toString(36).slice(2,8),
   myName: '',
-  empFilter: null
+  empFilter: null,
+  weitereGeburtstage: []
 };
 
 // ===== PRESENCE =====
@@ -489,25 +490,70 @@ function isArchivedEmp(emp){return isArchivedAsOf(emp,dateKey(new Date()));}
 function isNotYetStarted(emp){return isNotYetStartedAsOf(emp,dateKey(new Date()));}
 function isHiddenEmp(emp){return isArchivedEmp(emp)||isNotYetStarted(emp);}
 function fmtDate(k){if(!k)return'';const[y,m,d]=k.split('-');return d+'.'+m+'.'+y;}
-function fmtTagMonat(k){if(!k)return'';const[,m,d]=k.split('-');return d+'.'+m+'.';}
+// Geburtstage stehen als "MM-TT" in der Datenbank, ohne Jahr: das Alter
+// braucht niemand, und die Datenbank ist ohne Anmeldung lesbar. Aeltere
+// Eintraege kamen als "JJJJ-MM-TT" - die letzten fuenf Zeichen passen bei
+// beiden.
+function fmtTagMonat(k){if(!k)return'';const t=String(k).slice(-5);return t.slice(3)+'.'+t.slice(0,2)+'.';}
 
 // Ein Geburtstag wiederholt sich jedes Jahr, verglichen werden darum nur Tag
 // und Monat. Das Jahrgang-Feld bleibt gespeichert, wird aber nirgends
 // angezeigt - das Alter gehoert niemandem an die Wand.
 function gbTagMonat(k,refKey){
   if(!k)return '';
-  const td=k.slice(5);
+  const td=String(k).slice(-5);
   if(td!=='02-29')return td;
   // Am 29. Februar Geborene feiern in gewoehnlichen Jahren am 28.
   return new Date(+refKey.slice(0,4),1,29).getDate()===29 ? '02-29' : '02-28';
 }
+// Mitarbeiter plus die Namen aus "Weitere Geburtstage" - Leute, die nicht
+// in der Tagesplanung stehen und darum auch nicht in der Mitarbeiterliste
+// auftauchen duerfen.
 function geburtstagsKinder(refKey){
-  return (state.employees||[]).filter(e=>{
+  const td=refKey.slice(5);
+  const liste=(state.employees||[]).filter(e=>{
     const d=empDates(e);
     return d.geburtstag && !(state.inactiveEmployees||[]).includes(e)
       && !isArchivedAsOf(e,refKey) && !isNotYetStartedAsOf(e,refKey)
-      && gbTagMonat(d.geburtstag,refKey)===refKey.slice(5);
+      && gbTagMonat(d.geburtstag,refKey)===td;
+  }).map(e=>({name:e,tag:empDates(e).geburtstag}));
+  (state.weitereGeburtstage||[]).forEach(w=>{
+    if(w&&w.name&&w.tag&&gbTagMonat(w.tag,refKey)===td)liste.push({name:w.name,tag:w.tag});
   });
+  return liste;
+}
+
+// Zwei Auswahlfelder statt eines Datumsfeldes: ein Jahr liesse sich gar
+// nicht erst eintippen.
+const GB_MONATE=['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+function gbFelder(wert,praefix){
+  const td=String(wert||'').slice(-5);
+  const mm=td?td.slice(0,2):'', tt=td?td.slice(3):'';
+  let tage='<option value="">–</option>';
+  for(let i=1;i<=31;i++){const v=String(i).padStart(2,'0');tage+=`<option value="${v}"${v===tt?' selected':''}>${i}.</option>`;}
+  const mons='<option value="">–</option>'+GB_MONATE.map((m,i)=>{
+    const v=String(i+1).padStart(2,'0');
+    return `<option value="${v}"${v===mm?' selected':''}>${m}</option>`;}).join('');
+  return `<div style="display:flex;gap:8px">
+    <select class="modal-input" id="${praefix}Tag" style="flex:1">${tage}</select>
+    <select class="modal-input" id="${praefix}Monat" style="flex:2">${mons}</select>
+  </div>`;
+}
+function gbAuslesen(praefix){
+  const t=document.getElementById(praefix+'Tag').value;
+  const m=document.getElementById(praefix+'Monat').value;
+  return (t&&m) ? m+'-'+t : '';
+}
+// Einmalige Umstellung: frueher stand das volle Geburtsdatum in der
+// Datenbank. Das Jahr faellt hier weg, ohne dass jemand etwas neu erfasst.
+function gbJahreEntfernen(){
+  const d=state.employeeDates||{};
+  let z=0;
+  Object.keys(d).forEach(e=>{
+    const g=d[e]&&d[e].geburtstag;
+    if(g&&String(g).length>5){d[e].geburtstag=String(g).slice(-5);z++;}
+  });
+  if(z){saveSettings();showToast(z+(z===1?' Geburtsjahr entfernt':' Geburtsjahre entfernt'),'success');}
 }
 
 function setupPresence(name) {
@@ -581,6 +627,8 @@ function setupListeners() {
       else state.inactiveEmployees = [];
       if (s.employeeDates) state.employeeDates = s.employeeDates;
       else state.employeeDates = {};
+      state.weitereGeburtstage = s.weitereGeburtstage || [];
+      gbJahreEntfernen();
       state.kalender = s.kalender || {};
       if (s.kalenderStatusOnly) state.kalenderStatusOnly = s.kalenderStatusOnly;
     }
@@ -834,9 +882,9 @@ function renderTodoPanel(){
   // Geburtstag dort, wo er hingehoert.
   const gbKey=dateKey(state.selectedDate||new Date());
   const gb=geburtstagsKinder(gbKey);
-  const gbBanner=gb.length?`<div class="gb-banner">${gb.map(name=>
-      `<div class="gb-eintrag"><span class="gb-text">Happy Birthday ${escHtml(name)} 🥳</span>`
-      +`<span class="gb-datum">${fmtTagMonat(empDates(name).geburtstag)}</span></div>`).join('')}</div>`:'';
+  const gbBanner=gb.length?`<div class="gb-banner">${gb.map(g=>
+      `<div class="gb-eintrag"><span class="gb-text">Happy Birthday ${escHtml(g.name)} 🥳</span>`
+      +`<span class="gb-datum">${fmtTagMonat(g.tag)}</span></div>`).join('')}</div>`:'';
   el.innerHTML=gbBanner+`
     <div class="todo-panel">
       <div class="todo-header"><span>📌 Elektra Allgemein ToDo's</span><button class="action-btn" onclick="addTodo()">+ Aufgabe</button></div>
@@ -1556,12 +1604,76 @@ function renderSettingsView(){
     ${upcomingSection}
     ${archivedSection}
     <div class="settings-section"><div class="settings-section-title">Fahrzeuge (${state.vehicles.length})</div>${vehRows}<button class="btn-add" onclick="addVeh()">+ Fahrzeug hinzufügen</button></div>
+    ${wgAbschnitt()}
     ${knKalenderSettingsHtml()}
     ${!state.meta?.kontrollenImportDone?`<div class="settings-section"><div class="settings-section-title">Kontrollen-Import</div><p style="font-size:12px;color:var(--text2);margin-bottom:10px">Importiert die bestehende Excel-Liste (${KONTROLLEN_IMPORT.length} Einträge) einmalig in den Kontrollen-Tab.</p><button class="btn-add" onclick="importKontrollenFromExcel()">+ Alte Kontrollliste importieren</button></div>`:''}
   </div>`;
 }
 
-function saveSettings(){fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[],employeeDates:state.employeeDates||{},kalender:state.kalender||{},kalenderStatusOnly:state.kalenderStatusOnly||[]},100);}
+function saveSettings(){fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[],employeeDates:state.employeeDates||{},weitereGeburtstage:state.weitereGeburtstage||[],kalender:state.kalender||{},kalenderStatusOnly:state.kalenderStatusOnly||[]},100);}
+
+// ===== WEITERE GEBURTSTAGE =====
+// Leute, die gefeiert werden sollen, aber nicht in der Tagesplanung stehen:
+// der alte Patron, das Sekretariat. Bewusst eine eigene Liste - haetten sie
+// einen Eintrag bei den Mitarbeitern, taeten sie es ueberall: im Plan, in
+// den Zuweisungen, bei den Anmeldungen.
+function wgListe(){return (state.weitereGeburtstage||[]).slice();}
+function wgAbschnitt(){
+  const rows=wgListe().map((w,i)=>`<div class="settings-row">
+    <div class="settings-row-name">${escHtml(w.name||'')}
+      <div style="font-size:10px;color:var(--text3);margin-top:2px">Geburtstag ${fmtTagMonat(w.tag)}</div></div>
+    <div class="settings-row-actions"><button class="btn-sm" onclick="wgBearbeiten(${i})">Ändern</button>
+      <button class="btn-sm danger" onclick="wgLoeschen(${i})">Entfernen</button></div>
+  </div>`).join('');
+  return `<div class="settings-section">
+    <div class="settings-section-title">Weitere Geburtstage (${wgListe().length})
+      <span style="font-size:11px;font-weight:400;color:var(--text3)">– erscheinen nur im Geburtstagsgruss, nicht in der Tagesplanung</span>
+    </div>
+    ${rows||'<div style="color:var(--text3);font-size:12px;padding:10px 0">Noch niemand erfasst.</div>'}
+    <button class="btn-add" onclick="wgNeu()">+ Geburtstag hinzufügen</button>
+  </div>`;
+}
+function wgFormular(w){
+  return `<input class="modal-input" id="wgName" placeholder="Name, z.B. Urs" value="${escHtml((w&&w.name)||'')}">
+    <div style="margin-top:10px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Geburtstag</div>
+    <div style="margin-top:4px">${gbFelder(w&&w.tag,'wgGeb')}</div>
+    <p style="font-size:11px;color:var(--text3);margin-top:8px">Der Name erscheint am Geburtstag auf dem Wandbildschirm und über der To-do-Liste – sonst nirgends.</p>`;
+}
+function wgAuslesen(){
+  const name=document.getElementById('wgName').value.trim();
+  const tag=gbAuslesen('wgGeb');
+  if(!name||!tag)return null;
+  return {name,tag};
+}
+function wgNeu(){
+  showModal({title:'Weiterer Geburtstag',content:wgFormular(null),actions:[
+    {label:'Abbrechen',cancel:true},
+    {label:'Hinzufügen',primary:true,action:()=>{
+      const d=wgAuslesen(); if(!d){showToast('Name, Tag und Monat ausfüllen','error');return;}
+      state.weitereGeburtstage=wgListe().concat([d]);
+      saveSettings();closeModal();renderSettingsView();showToast(d.name+' erfasst','success');
+    }}]});
+  setTimeout(()=>document.getElementById('wgName')?.focus(),50);
+}
+function wgBearbeiten(i){
+  const w=wgListe()[i]; if(!w)return;
+  showModal({title:'Geburtstag ändern',content:wgFormular(w),actions:[
+    {label:'Abbrechen',cancel:true},
+    {label:'Speichern',primary:true,action:()=>{
+      const d=wgAuslesen(); if(!d){showToast('Name, Tag und Monat ausfüllen','error');return;}
+      const l=wgListe(); l[i]=d; state.weitereGeburtstage=l;
+      saveSettings();closeModal();renderSettingsView();showToast('Gespeichert','success');
+    }}]});
+}
+function wgLoeschen(i){
+  const w=wgListe()[i]; if(!w)return;
+  showModal({title:'Geburtstag entfernen',
+    content:`<p style="color:var(--text2)">Soll <strong>${escHtml(w.name||'')}</strong> aus den Geburtstagen entfernt werden?</p>`,
+    actions:[{label:'Abbrechen',cancel:true},{label:'Entfernen',danger:true,action:()=>{
+      state.weitereGeburtstage=wgListe().filter((x,j)=>j!==i);
+      saveSettings();closeModal();renderSettingsView();showToast('Entfernt','success');
+    }}]});
+}
 
 function importKontrollenFromExcel(){
   if(!confirm('Alte Kontrollliste (' + KONTROLLEN_IMPORT.length + ' Einträge) aus Excel importieren?')) return;
@@ -1618,15 +1730,15 @@ function openDatesModal(i){
   const d=empDates(emp);
   showModal({title:'Daten: '+emp,
     content:`<label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">Geburtstag</label>
-    <input type="date" class="modal-input" id="dGeb" value="${d.geburtstag||''}">
-    <p style="font-size:11px;color:var(--text3);margin-top:6px">Am Geburtstag steht "Happy Birthday" auf dem Wandbildschirm und hier über der To-do-Liste. Angezeigt werden nur Tag und Monat, nie das Alter.</p>
+    ${gbFelder(d.geburtstag,'dGeb')}
+    <p style="font-size:11px;color:var(--text3);margin-top:6px">Am Geburtstag steht "Happy Birthday" auf dem Wandbildschirm und hier über der To-do-Liste. Das Jahr wird nicht erfasst – gespeichert sind nur Tag und Monat.</p>
     <label style="font-size:12px;color:var(--text2);display:block;margin:12px 0 4px">Eintrittsdatum</label>
     <input type="date" class="modal-input" id="dEin" value="${d.eintritt||''}">
     <label style="font-size:12px;color:var(--text2);display:block;margin:12px 0 4px">Austrittsdatum</label>
     <input type="date" class="modal-input" id="dAus" value="${d.austritt||''}">
     <p style="font-size:11px;color:var(--text3);margin-top:10px">Liegt das Eintrittsdatum in der Zukunft, erscheint der Mitarbeiter erst ab diesem Tag automatisch. Ist das Austrittsdatum erreicht, wird er automatisch archiviert (zählt nicht mehr mit, vergangene Einsätze bleiben sichtbar).</p>`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{
-      const geb=document.getElementById('dGeb').value;
+      const geb=gbAuslesen('dGeb');
       const ein=document.getElementById('dEin').value;
       const aus=document.getElementById('dAus').value;
       if(!state.employeeDates)state.employeeDates={};
