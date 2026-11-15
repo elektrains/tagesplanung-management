@@ -458,6 +458,7 @@ let state = {
   werkstattAufgaben: {},
   infoboard: {},
   aemter: {},
+  termine: {},
   wsZeigeErledigte: false,
   aboView: 'aktiv',
   aboFilter: '',
@@ -588,6 +589,10 @@ function setupListeners() {
   });
   db.ref('aemter').on('value', snap => {
     state.aemter = snap.val() || {};
+    if (state.view === 'werkstatt') renderWerkstattView();
+  });
+  db.ref('termine').on('value', snap => {
+    state.termine = snap.val() || {};
     if (state.view === 'werkstatt') renderWerkstattView();
   });
   db.ref('meta').on('value', snap => {
@@ -2233,6 +2238,7 @@ function renderWerkstattView(){
     </div>
     ${ibAbschnitt()}
     ${amAbschnitt()}
+    ${tmAbschnitt()}
   </div>`;
 }
 function wsErledigteUmschalten(){state.wsZeigeErledigte=!state.wsZeigeErledigte;renderWerkstattView();}
@@ -2345,6 +2351,103 @@ function ibFelderAuslesen(){
     }
     return f;
   }).filter(Boolean);
+}
+
+// ===== TERMINE =====
+// Anlaesse mit festem Datum. Auf dem Wandbildschirm erscheinen sie eine
+// Woche vorher unten, stehen am Tag selbst rot da und verschwinden danach
+// von selbst. Hier bleiben vergangene sichtbar, aber ausgegraut - sonst
+// wuesste niemand, warum der Eintrag weg ist.
+function tmListe(){
+  return Object.entries(state.termine||{}).filter(([,t])=>t&&t.datum)
+    .sort((a,b)=>a[1].datum<b[1].datum?-1:a[1].datum>b[1].datum?1:(a[1].createdAt||0)-(b[1].createdAt||0));
+}
+function tmVorbei(t){return !!t.datum && t.datum < dateKey(new Date());}
+function tmTageBis(iso){
+  const [y,m,d]=iso.split('-').map(Number), n=new Date();
+  return Math.round((new Date(y,m-1,d)-new Date(n.getFullYear(),n.getMonth(),n.getDate()))/86400000);
+}
+function tmWann(t){
+  const n=tmTageBis(t.datum);
+  if(n<0)return 'vorbei';
+  if(n===0)return 'heute';
+  if(n===1)return 'morgen';
+  if(n<=7)return 'in '+n+' Tagen – am Bildschirm sichtbar';
+  return 'in '+n+' Tagen';
+}
+
+function tmAbschnitt(){
+  const liste=tmListe();
+  const rows=liste.map(([id,t])=>{
+    const vorbei=tmVorbei(t);
+    return `<div class="todo-item" style="${vorbei?'opacity:.45':''}">
+      <div class="todo-body" onclick="tmBearbeiten('${id}')">
+        <div class="todo-title">${escHtml(t.titel||'')}</div>
+        <div class="todo-desc">${tmWann(t)}${t.zeit?' · '+escHtml(t.zeit):''}</div>
+      </div>
+      <span class="todo-due">${fmtDate(t.datum)}</span>
+      <button class="btn-sm danger" onclick="tmLoeschen('${id}')">Entfernen</button>
+    </div>`;
+  }).join('');
+  return `<div class="settings-section">
+    <div class="settings-section-title">Termine (${liste.length})
+      <span style="font-size:11px;font-weight:400;color:var(--text3)">– erscheinen eine Woche vorher unten am Wandbildschirm, am Tag selbst rot</span>
+    </div>
+    ${rows||'<div style="color:var(--text3);font-size:12px;padding:10px 0">Noch kein Termin erfasst.</div>'}
+    <button class="btn-add" onclick="tmNeu()">+ Termin hinzufuegen</button>
+  </div>`;
+}
+
+function tmFormular(t){
+  const LAB='style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700"';
+  return `<input class="modal-input" id="tmTitel" placeholder="Termin, z.B. Weihnachtsessen" value="${escHtml((t&&t.titel)||'')}">
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <div style="flex:1">
+        <div ${LAB}>Datum</div>
+        <input class="modal-input" id="tmDatum" type="date" style="margin-top:4px" value="${(t&&t.datum)||''}">
+      </div>
+      <div style="flex:1">
+        <div ${LAB}>Wann genau (optional)</div>
+        <input class="modal-input" id="tmZeit" style="margin-top:4px" placeholder="18:30 Uhr, Restaurant Arcade" value="${escHtml((t&&t.zeit)||'')}">
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:6px">Der Termin verschwindet nach seinem Datum von selbst vom Bildschirm. Hier bleibt er stehen, bis er entfernt wird.</div>`;
+}
+function tmAuslesen(){
+  const titel=document.getElementById('tmTitel').value.trim();
+  const datum=document.getElementById('tmDatum').value;
+  if(!titel||!datum){showToast('Titel und Datum sind nötig','error');return null;}
+  return {titel,datum,zeit:document.getElementById('tmZeit').value.trim()};
+}
+function tmNeu(){
+  showModal({title:'Neuer Termin',content:tmFormular(null),actions:[
+    {label:'Abbrechen',cancel:true},
+    {label:'Hinzufuegen',primary:true,action:()=>{
+      const d=tmAuslesen();if(!d)return;
+      db.ref('termine/tm'+Date.now()).set({...d,createdAt:Date.now()});
+      closeModal();showToast('Termin hinzugefuegt','success');
+    }}]});
+  setTimeout(()=>document.getElementById('tmTitel')?.focus(),50);
+}
+function tmBearbeiten(id){
+  const t=(state.termine||{})[id];if(!t)return;
+  showModal({title:'Termin bearbeiten',content:tmFormular(t),actions:[
+    {label:'Entfernen',danger:true,action:()=>tmLoeschen(id)},
+    {label:'Abbrechen',cancel:true},
+    {label:'Speichern',primary:true,action:()=>{
+      const d=tmAuslesen();if(!d)return;
+      db.ref('termine/'+id).update(d);
+      closeModal();showToast('Gespeichert','success');
+    }}]});
+  setTimeout(()=>document.getElementById('tmTitel')?.focus(),50);
+}
+function tmLoeschen(id){
+  const t=(state.termine||{})[id];if(!t)return;
+  showModal({title:'Termin entfernen',
+    content:`<p style="color:var(--text2)">Soll <strong>${escHtml(t.titel||'')}</strong> vom ${fmtDate(t.datum)} entfernt werden?</p>`,
+    actions:[{label:'Abbrechen',cancel:true},{label:'Entfernen',danger:true,action:()=>{
+      db.ref('termine/'+id).remove();closeModal();showToast('Entfernt','success');
+    }}]});
 }
 
 // ===== AEMTLI =====
