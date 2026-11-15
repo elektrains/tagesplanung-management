@@ -2203,7 +2203,11 @@ function wsListe(){
     return (A.createdAt||0)-(B.createdAt||0);
   });
 }
-function wsUeberfaellig(a){const h=dateKey(new Date());return !a.erledigt&&!!a.termin&&a.termin<=h;}
+// Eine vorausgeplante Aufgabe steht am Bildschirm erst ab ihrem Tag. Hier
+// bleibt sie von Anfang an sichtbar - sonst waere sie nach dem Speichern
+// spurlos verschwunden, und niemand wuesste, ob sie angekommen ist.
+function wsGeplant(a){return !!a.ab && a.ab > dateKey(new Date());}
+function wsUeberfaellig(a){const h=dateKey(new Date());return !a.erledigt&&!wsGeplant(a)&&!!a.termin&&a.termin<=h;}
 function wsOffeneAnzahl(){return Object.values(state.werkstattAufgaben||{}).filter(wsUeberfaellig).length;}
 function wsPersonen(a){return Array.isArray(a.zugewiesen)?a.zugewiesen:(a.zugewiesen?[a.zugewiesen]:[]);}
 
@@ -2212,14 +2216,15 @@ function renderWerkstattView(){
   const liste=state.wsZeigeErledigte?alle:alle.filter(([,a])=>!a.erledigt);
   const erledigt=alle.filter(([,a])=>a.erledigt).length;
   const rows=liste.map(([id,a])=>{
-    const ueber=wsUeberfaellig(a);
+    const ueber=wsUeberfaellig(a), geplant=wsGeplant(a);
     const pers=wsPersonen(a);
-    return `<div class="todo-item${ueber?' overdue':''}" style="${a.erledigt?'opacity:.5':''}">
+    return `<div class="todo-item${ueber?' overdue':''}" style="${a.erledigt?'opacity:.5':(geplant?'opacity:.6':'')}">
       <div class="todo-check" style="${a.erledigt?'background:var(--green);border-color:var(--green)':''}" onclick="wsUmschalten('${id}')" title="${a.erledigt?'Wieder oeffnen':'Als erledigt markieren'}"></div>
       <div class="todo-body" onclick="wsBearbeiten('${id}')">
         <div class="todo-title" style="${a.erledigt?'text-decoration:line-through':''}">${escHtml(a.titel||'')}</div>
         ${a.beschreibung?`<div class="todo-desc">${escHtml(a.beschreibung)}</div>`:''}
       </div>
+      ${geplant?`<span class="todo-assignee">erscheint ${fmtDate(a.ab)}</span>`:''}
       ${a.termin?`<span class="todo-due">bis ${fmtDate(a.termin)}</span>`:''}
       ${pers.map(p=>`<span class="todo-assignee">${escHtml(p)}</span>`).join('')}
       <button class="btn-sm danger" onclick="wsLoeschen('${id}')">Entfernen</button>
@@ -2250,8 +2255,17 @@ function wsFormular(a){
   const emps=state.employees.filter(e=>!isHiddenEmp(e));
   return `<input class="modal-input" id="wsTitel" placeholder="Aufgabe, z.B. Lager aufraeumen" value="${escHtml((a&&a.titel)||'')}">
     <textarea class="modal-input" id="wsBeschreibung" placeholder="Beschreibung (optional)" rows="2" style="margin-top:8px;resize:vertical">${escHtml((a&&a.beschreibung)||'')}</textarea>
-    <div style="margin-top:10px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Termin</div>
-    <input class="modal-input" id="wsTermin" type="date" style="margin-top:4px" value="${(a&&a.termin)||''}">
+    <div style="display:flex;gap:10px;margin-top:10px">
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Erscheint ab</div>
+        <input class="modal-input" id="wsAb" type="date" style="margin-top:4px" value="${(a&&a.ab)||''}">
+      </div>
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Termin</div>
+        <input class="modal-input" id="wsTermin" type="date" style="margin-top:4px" value="${(a&&a.termin)||''}">
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:4px">Ohne "Erscheint ab" steht die Aufgabe sofort am Bildschirm. Mit Datum taucht sie erst an diesem Tag dort auf – hier ist sie bis dahin ausgegraut.</div>
     <div style="margin-top:12px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Zugewiesen (Mehrfachauswahl)</div>
     <div class="vehicle-grid" id="wsPersonenGrid" style="grid-template-columns:repeat(3,1fr);max-height:200px">
       ${emps.map(e=>`<div class="vehicle-opt${sel.includes(e)?' sel':''}" data-name="${escHtml(e)}" onclick="this.classList.toggle('sel')">${escHtml(e)}</div>`).join('')}
@@ -2263,6 +2277,7 @@ function wsAuslesen(){
   return {
     titel,
     beschreibung:document.getElementById('wsBeschreibung').value.trim(),
+    ab:document.getElementById('wsAb').value||'',
     termin:document.getElementById('wsTermin').value||'',
     zugewiesen:Array.from(document.querySelectorAll('#wsPersonenGrid .vehicle-opt.sel')).map(el=>el.dataset.name)
   };
@@ -2775,6 +2790,7 @@ function fmtZeitraum(i){
   return (ya===yb&&ma===mb) ? da+'.–'+fmtDate(b) : fmtDate(a)+' – '+fmtDate(b);
 }
 function ibAbgelaufen(i){const h=dateKey(new Date());return !!i.bis && i.bis < h;}
+function ibGeplant(i){const h=dateKey(new Date());return !!i.ab && i.ab > h;}
 function ibTeilnehmer(i){return Object.keys(i.teilnehmer||{});}
 
 // ----- Auswertung einer Mitteilung -----
@@ -2883,15 +2899,16 @@ function ibAuswertung(id){
 function ibAbschnitt(){
   const liste=ibListe();
   const rows=liste.map(([id,i])=>{
-    const t=ibTeilnehmer(i), ab=ibAbgelaufen(i);
-    return `<div class="todo-item" style="${ab?'opacity:.45':''}">
+    const t=ibTeilnehmer(i), ab=ibAbgelaufen(i), vor=ibGeplant(i);
+    return `<div class="todo-item" style="${ab?'opacity:.45':(vor?'opacity:.6':'')}">
       <div class="todo-body" onclick="ibBearbeiten('${id}')">
-        <div class="todo-title">${escHtml(i.titel||'')}${ab?' <span style="font-size:10px;color:var(--text3)">(abgelaufen, nicht mehr sichtbar)</span>':''}</div>
+        <div class="todo-title">${escHtml(i.titel||'')}${ab?' <span style="font-size:10px;color:var(--text3)">(abgelaufen, nicht mehr sichtbar)</span>':''}${vor?` <span style="font-size:10px;color:var(--text3)">(erscheint am ${fmtDate(i.ab)})</span>`:''}</div>
         ${i.text?`<div class="todo-desc">${escHtml(i.text)}</div>`:''}
         ${i.anmeldung?`<div class="todo-desc" style="margin-top:6px">${t.length} angemeldet${t.length?': '+t.map(escHtml).join(', '):''}</div>`:''}
         ${ibFelderVon(i).length?`<div class="todo-desc" style="margin-top:4px;color:var(--text3)">Fragen: ${ibFelderVon(i).map(f=>escHtml(f.label)).join(' · ')}</div>`:''}
       </div>
       ${i.datum?`<span class="todo-due">${fmtZeitraum(i)}</span>`:''}
+      ${i.ab?`<span class="todo-assignee">zeigen ab ${fmtDate(i.ab)}</span>`:''}
       ${i.bis?`<span class="todo-assignee">zeigen bis ${fmtDate(i.bis)}</span>`:''}
       ${i.anmeldung?'<span class="todo-assignee">Anmeldung</span>':''}
       ${(i.anmeldung||ibFelderVon(i).length)?`<button class="btn-sm" onclick="ibAuswertung('${id}')">Auswertung</button>`:''}
@@ -2924,12 +2941,15 @@ function ibFormular(i){
     <div style="font-size:11px;color:var(--text3);margin-top:4px">Dauert der Anlass mehrere Tage, das Enddatum eintragen – auf dem Wandbildschirm steht dann z.B. "12.–14.03.2027".</div>
     <div style="display:flex;gap:10px;margin-top:10px">
       <div style="flex:1">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Anzeigen ab</div>
+        <input class="modal-input" id="ibAb" type="date" style="margin-top:4px" value="${(i&&i.ab)||''}">
+      </div>
+      <div style="flex:1">
         <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Anzeigen bis</div>
         <input class="modal-input" id="ibBis" type="date" style="margin-top:4px" value="${(i&&i.bis)||''}">
       </div>
-      <div style="flex:1"></div>
     </div>
-    <div style="font-size:11px;color:var(--text3);margin-top:4px">Ohne "Anzeigen bis" bleibt die Mitteilung stehen, bis sie entfernt wird.</div>
+    <div style="font-size:11px;color:var(--text3);margin-top:4px">Ohne Datum erscheint die Mitteilung sofort und bleibt, bis sie entfernt wird. Beide Felder zusammen ergeben ein Fenster – ein Geburtstag z.B. steht so nur an diesem einen Tag.</div>
     <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;font-size:13px">
       <input type="checkbox" id="ibAnmeldung" ${an?'checked':''} style="width:16px;height:16px;cursor:pointer">
       Anmeldeliste anzeigen – Mitarbeiter tragen sich am Bildschirm selbst ein
@@ -2947,6 +2967,7 @@ function ibAuslesen(){
     text:document.getElementById('ibText').value.trim(),
     datum:document.getElementById('ibDatum').value||'',
     datumBis:document.getElementById('ibDatumBis').value||'',
+    ab:document.getElementById('ibAb').value||'',
     bis:document.getElementById('ibBis').value||'',
     // Fragen ohne Anmeldeliste waeren unbeantwortbar: niemand koennte sie
     // am Bildschirm aufrufen. Darum zieht eine Frage die Liste mit sich.
