@@ -1708,7 +1708,8 @@ function empUmbenennen(alt,neu){
     state.inactiveEmployees=state.inactiveEmployees.map(e=>e===alt?neu:e);
   }
 }
-function renameEmp(i){showModal({title:'Umbenennen',content:`<input class="modal-input" id="nn" value="${state.employees[i]}">`,actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){empUmbenennen(state.employees[i],v);state.employees[i]=v;saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
+function renameEmp(i){showModal({title:'Umbenennen',content:`<input class="modal-input" id="nn" value="${escHtml(state.employees[i])}">
+    <p style="font-size:11px;color:var(--text3);margin-top:10px">Geburtstag, Ein-/Austritt und ein Inaktiv-Vermerk wandern mit. In bereits erfassten Tagesplänen, Anmeldungen und Ämtli bleibt <strong>${escHtml(state.employees[i])}</strong> stehen – dort wird nichts umgeschrieben.</p>`,actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){empUmbenennen(state.employees[i],v);state.employees[i]=v;saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
 function deactivateEmp(i){
   const emp=state.employees[i];
   showModal({title:'Mitarbeiter deaktivieren',
