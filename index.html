@@ -150,6 +150,12 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .modal-title{font-size:15px;font-weight:700;margin-bottom:16px;}
 .modal-input{width:100%;padding:9px 12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--radius);color:var(--text);font-size:13px;outline:none;transition:border-color .15s;}
 .modal-input:focus{border-color:var(--accent);}
+/* Geburtstagsbanner: steht nur am Tag selbst da, darf darum auffallen. */
+.gb-banner{margin-top:24px;background:rgba(239,68,68,0.12);border:1px solid var(--red);
+  border-radius:var(--radius-lg);padding:12px 16px;display:flex;flex-direction:column;gap:6px;}
+.gb-eintrag{display:flex;align-items:baseline;gap:10px;}
+.gb-text{font-size:16px;font-weight:700;color:var(--red);}
+.gb-datum{font-size:12px;color:var(--red);opacity:.75;font-variant-numeric:tabular-nums;}
 .todo-panel{margin-top:24px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;}
 .todo-header{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:700;margin-bottom:10px;}
 .todo-item{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:var(--radius);background:var(--bg3);margin-bottom:6px;}
@@ -480,6 +486,26 @@ function isArchivedEmp(emp){return isArchivedAsOf(emp,dateKey(new Date()));}
 function isNotYetStarted(emp){return isNotYetStartedAsOf(emp,dateKey(new Date()));}
 function isHiddenEmp(emp){return isArchivedEmp(emp)||isNotYetStarted(emp);}
 function fmtDate(k){if(!k)return'';const[y,m,d]=k.split('-');return d+'.'+m+'.'+y;}
+function fmtTagMonat(k){if(!k)return'';const[,m,d]=k.split('-');return d+'.'+m+'.';}
+
+// Ein Geburtstag wiederholt sich jedes Jahr, verglichen werden darum nur Tag
+// und Monat. Das Jahrgang-Feld bleibt gespeichert, wird aber nirgends
+// angezeigt - das Alter gehoert niemandem an die Wand.
+function gbTagMonat(k,refKey){
+  if(!k)return '';
+  const td=k.slice(5);
+  if(td!=='02-29')return td;
+  // Am 29. Februar Geborene feiern in gewoehnlichen Jahren am 28.
+  return new Date(+refKey.slice(0,4),1,29).getDate()===29 ? '02-29' : '02-28';
+}
+function geburtstagsKinder(refKey){
+  return (state.employees||[]).filter(e=>{
+    const d=empDates(e);
+    return d.geburtstag && !(state.inactiveEmployees||[]).includes(e)
+      && !isArchivedAsOf(e,refKey) && !isNotYetStartedAsOf(e,refKey)
+      && gbTagMonat(d.geburtstag,refKey)===refKey.slice(5);
+  });
+}
 
 function setupPresence(name) {
   const presRef = db.ref('presence/' + state.myId);
@@ -801,7 +827,14 @@ function renderTodoPanel(){
       ${Object.keys(t.files||{}).length?`<span class="todo-assignee" title="Angehängte Dateien">📎 ${Object.keys(t.files).length}</span>`:''}
       ${t.assignee?`<span class="todo-assignee">${escHtml(t.assignee)}</span>`:''}
     </div>`;}).join('');
-  el.innerHTML=`
+  // Der Banner folgt dem gezeigten Tag: blaettert man vor, sieht man den
+  // Geburtstag dort, wo er hingehoert.
+  const gbKey=dateKey(state.selectedDate||new Date());
+  const gb=geburtstagsKinder(gbKey);
+  const gbBanner=gb.length?`<div class="gb-banner">${gb.map(name=>
+      `<div class="gb-eintrag"><span class="gb-text">Happy Birthday ${escHtml(name)} 🥳</span>`
+      +`<span class="gb-datum">${fmtTagMonat(empDates(name).geburtstag)}</span></div>`).join('')}</div>`:'';
+  el.innerHTML=gbBanner+`
     <div class="todo-panel">
       <div class="todo-header"><span>📌 Elektra Allgemein ToDo's</span><button class="action-btn" onclick="addTodo()">+ Aufgabe</button></div>
       ${items||'<div class="todo-empty">Keine offenen Aufgaben</div>'}
@@ -1473,12 +1506,12 @@ function renderSettingsView(){
     const col=COLORS[i%COLORS.length];const init=e.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
     const isInactive=(state.inactiveEmployees||[]).includes(e);
     const d=empDates(e);
-    const dateInfo=[d.eintritt?`Eintritt ${fmtDate(d.eintritt)}`:'',d.austritt?`Austritt geplant: ${fmtDate(d.austritt)}`:''].filter(Boolean).join(' · ');
+    const dateInfo=[d.geburtstag?`Geburtstag ${fmtTagMonat(d.geburtstag)}`:'',d.eintritt?`Eintritt ${fmtDate(d.eintritt)}`:'',d.austritt?`Austritt geplant: ${fmtDate(d.austritt)}`:''].filter(Boolean).join(' · ');
     return `<div class="settings-row" draggable="true" data-idx="${i}" ondragstart="dragStart(event,'emp',${i})" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropItem(event,'emp',${i})">
       <span class="drag-handle">⠿</span>
       <div style="width:26px;height:26px;border-radius:50%;background:${col}33;color:${col};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">${init}</div>
       <div class="settings-row-name">${e}${isInactive?'<span style="font-size:10px;margin-left:8px;padding:2px 6px;border-radius:4px;background:var(--red-bg);color:var(--red)">Inaktiv</span>':''}${dateInfo?`<div style="font-size:10px;color:var(--text3);margin-top:2px">${dateInfo}</div>`:''}</div>
-      <div class="settings-row-actions"><button class="btn-sm" onclick="renameEmp(${i})">Umbenennen</button>${isInactive?'<button class="btn-sm" style="color:var(--green)" onclick="reactivateEmp('+i+')">✓ Reaktivieren</button>':'<button class="btn-sm danger" onclick="deactivateEmp('+i+')">Deaktivieren</button>'}<button class="btn-sm" onclick="openDatesModal(${i})">Ein-/Austritt</button></div>
+      <div class="settings-row-actions"><button class="btn-sm" onclick="renameEmp(${i})">Umbenennen</button>${isInactive?'<button class="btn-sm" style="color:var(--green)" onclick="reactivateEmp('+i+')">✓ Reaktivieren</button>':'<button class="btn-sm danger" onclick="deactivateEmp('+i+')">Deaktivieren</button>'}<button class="btn-sm" onclick="openDatesModal(${i})">Daten</button></div>
     </div>`;
   }).join('');
   const archivedRows=archivedIdx.map(i=>{
@@ -1502,7 +1535,7 @@ function renderSettingsView(){
     return `<div class="settings-row">
       <div style="width:26px;height:26px;border-radius:50%;background:${col}33;color:${col};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700">${init}</div>
       <div class="settings-row-name">${e}<div style="font-size:10px;color:var(--text3);margin-top:2px">Eintritt ab ${fmtDate(d.eintritt)}</div></div>
-      <div class="settings-row-actions"><button class="btn-sm" onclick="renameEmp(${i})">Umbenennen</button><button class="btn-sm" onclick="openDatesModal(${i})">Ein-/Austritt</button></div>
+      <div class="settings-row-actions"><button class="btn-sm" onclick="renameEmp(${i})">Umbenennen</button><button class="btn-sm" onclick="openDatesModal(${i})">Daten</button></div>
     </div>`;
   }).join('');
   const upcomingSection=upcomingIdx.length?`<div class="settings-section" style="margin-top:16px">
@@ -1548,7 +1581,19 @@ function dropItem(e,type,toIdx){
   else{const a=state.vehicles.splice(dragSrcIdx,1)[0];state.vehicles.splice(toIdx,0,a);}
   dragSrcIdx=null;dragType=null;saveSettings();showToast('Reihenfolge gespeichert','success');
 }
-function renameEmp(i){showModal({title:'Umbenennen',content:`<input class="modal-input" id="nn" value="${state.employees[i]}">`,actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){state.employees[i]=v;saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
+// Geburtstag, Ein-/Austritt und der Inaktiv-Vermerk haengen am Namen und
+// muessen beim Umbenennen mitwandern - sonst waeren sie verloren.
+function empUmbenennen(alt,neu){
+  if(alt===neu)return;
+  if(state.employeeDates&&state.employeeDates[alt]){
+    state.employeeDates[neu]=state.employeeDates[alt];
+    delete state.employeeDates[alt];
+  }
+  if((state.inactiveEmployees||[]).includes(alt)){
+    state.inactiveEmployees=state.inactiveEmployees.map(e=>e===alt?neu:e);
+  }
+}
+function renameEmp(i){showModal({title:'Umbenennen',content:`<input class="modal-input" id="nn" value="${state.employees[i]}">`,actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{const v=document.getElementById('nn').value.trim();if(v){empUmbenennen(state.employees[i],v);state.employees[i]=v;saveSettings();closeModal();}}}]});setTimeout(()=>document.getElementById('nn')?.focus(),50);}
 function deactivateEmp(i){
   const emp=state.employees[i];
   showModal({title:'Mitarbeiter deaktivieren',
@@ -1568,17 +1613,22 @@ function reactivateEmp(i){
 function openDatesModal(i){
   const emp=state.employees[i];
   const d=empDates(emp);
-  showModal({title:'Ein-/Austritt: '+emp,
-    content:`<label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">Eintrittsdatum</label>
+  showModal({title:'Daten: '+emp,
+    content:`<label style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">Geburtstag</label>
+    <input type="date" class="modal-input" id="dGeb" value="${d.geburtstag||''}">
+    <p style="font-size:11px;color:var(--text3);margin-top:6px">Am Geburtstag steht "Happy Birthday" auf dem Wandbildschirm und hier über der To-do-Liste. Angezeigt werden nur Tag und Monat, nie das Alter.</p>
+    <label style="font-size:12px;color:var(--text2);display:block;margin:12px 0 4px">Eintrittsdatum</label>
     <input type="date" class="modal-input" id="dEin" value="${d.eintritt||''}">
     <label style="font-size:12px;color:var(--text2);display:block;margin:12px 0 4px">Austrittsdatum</label>
     <input type="date" class="modal-input" id="dAus" value="${d.austritt||''}">
     <p style="font-size:11px;color:var(--text3);margin-top:10px">Liegt das Eintrittsdatum in der Zukunft, erscheint der Mitarbeiter erst ab diesem Tag automatisch. Ist das Austrittsdatum erreicht, wird er automatisch archiviert (zählt nicht mehr mit, vergangene Einsätze bleiben sichtbar).</p>`,
     actions:[{label:'Abbrechen',cancel:true},{label:'Speichern',primary:true,action:()=>{
+      const geb=document.getElementById('dGeb').value;
       const ein=document.getElementById('dEin').value;
       const aus=document.getElementById('dAus').value;
       if(!state.employeeDates)state.employeeDates={};
       const rec={};
+      if(geb)rec.geburtstag=geb;
       if(ein)rec.eintritt=ein;
       if(aus)rec.austritt=aus;
       state.employeeDates[emp]=rec;
