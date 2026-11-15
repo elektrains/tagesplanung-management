@@ -2353,6 +2353,204 @@ function ibFelderAuslesen(){
   }).filter(Boolean);
 }
 
+// ===== TERMINE AUS EXCEL =====
+// Die Anwesenheitskontrolle der Lehrlinge haelt alle Foerderungstermine
+// eines Lehrjahres: Spalte A das Datum, daneben ein Kreuz in der Spalte des
+// Jahrgangs (1+2 oder 3+4) und eines beim Leiter (TH oder CB). Statt jeden
+// Termin von Hand abzutippen, liest die App die Datei direkt.
+//
+// Entpackt wird ohne fremde Bibliothek: eine xlsx-Datei ist ein ZIP, und der
+// Browser bringt mit DecompressionStream alles mit, was es dafuer braucht.
+let tmGefunden = [];
+
+async function tmZipLesen(buf){
+  const dv=new DataView(buf), u8=new Uint8Array(buf), td=new TextDecoder();
+  let eo=-1;
+  for(let i=u8.length-22;i>=0 && i>u8.length-66000;i--){ if(dv.getUint32(i,true)===0x06054b50){eo=i;break;} }
+  if(eo<0)throw new Error('Das ist keine Excel-Datei (.xlsx).');
+  const anzahl=dv.getUint16(eo+10,true);
+  let p=dv.getUint32(eo+16,true);
+  const dateien={};
+  for(let i=0;i<anzahl;i++){
+    if(dv.getUint32(p,true)!==0x02014b50)break;
+    const method=dv.getUint16(p+10,true), csize=dv.getUint32(p+20,true);
+    const nlen=dv.getUint16(p+28,true), elen=dv.getUint16(p+30,true), clen=dv.getUint16(p+32,true);
+    const lho=dv.getUint32(p+42,true);
+    const name=td.decode(u8.subarray(p+46,p+46+nlen));
+    const lnlen=dv.getUint16(lho+26,true), lelen=dv.getUint16(lho+28,true);
+    const start=lho+30+lnlen+lelen;
+    dateien[name]={method,daten:u8.slice(start,start+csize)};
+    p+=46+nlen+elen+clen;
+  }
+  return dateien;
+}
+async function tmEntpacken(e){
+  if(!e)return '';
+  if(e.method===0)return new TextDecoder().decode(e.daten);
+  if(typeof DecompressionStream!=='function')
+    throw new Error('Dieser Browser kann die Datei nicht entpacken. Bitte Chrome oder Edge verwenden.');
+  const strom=new Blob([e.daten]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new TextDecoder().decode(new Uint8Array(await new Response(strom).arrayBuffer()));
+}
+// Excel zaehlt Tage ab dem 30.12.1899 - und kennt einen 29.2.1900, den es nie
+// gab; fuer alles nach 1900 hebt sich das mit dem versetzten Nullpunkt auf.
+function tmSerialIso(n){
+  const d=new Date(Date.UTC(1899,11,30)+Math.round(n)*86400000);
+  return d.toISOString().slice(0,10);
+}
+function tmZelleIso(wert){
+  if(wert==null)return '';
+  const s=String(wert).trim();
+  if(/^\d{4,6}(\.\d+)?$/.test(s) && +s>20000)return tmSerialIso(+s);
+  let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m)return m[1]+'-'+m[2]+'-'+m[3];
+  m=s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if(m)return m[3]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[1]).padStart(2,'0');
+  return '';
+}
+
+// Aus dem Blatt eine Tabelle {Zeile: {Spalte: Wert}} machen.
+async function tmBlattLesen(buf){
+  const dateien=await tmZipLesen(buf);
+  const blattName=Object.keys(dateien).find(n=>/^xl\/worksheets\/sheet1\.xml$/i.test(n))
+    || Object.keys(dateien).find(n=>/^xl\/worksheets\/.+\.xml$/i.test(n));
+  if(!blattName)throw new Error('In der Datei ist kein Tabellenblatt zu finden.');
+  const parser=new DOMParser();
+  const ssXml=await tmEntpacken(dateien['xl/sharedStrings.xml']);
+  const texte=ssXml ? [...parser.parseFromString(ssXml,'application/xml').getElementsByTagName('si')]
+    .map(si=>[...si.getElementsByTagName('t')].map(t=>t.textContent).join('')) : [];
+  const doc=parser.parseFromString(await tmEntpacken(dateien[blattName]),'application/xml');
+  const tabelle={};
+  [...doc.getElementsByTagName('c')].forEach(c=>{
+    const ref=c.getAttribute('r')||''; const m=ref.match(/^([A-Z]+)(\d+)$/); if(!m)return;
+    const v=c.getElementsByTagName('v')[0];
+    let wert = v ? v.textContent : '';
+    if(c.getAttribute('t')==='s') wert = texte[+wert] || '';
+    if(c.getAttribute('t')==='inlineStr'){
+      wert=[...c.getElementsByTagName('t')].map(t=>t.textContent).join('');
+    }
+    if(wert==='')return;
+    (tabelle[+m[2]] = tabelle[+m[2]] || {})[m[1]] = wert;
+  });
+  return tabelle;
+}
+
+// Die Jahrgangs-Spalten stehen in der Zeile unter "Lehrjahr:" - dort, wo
+// "1+2" und "3+4" steht. So bleibt die Zuordnung richtig, auch wenn die
+// Spalten einmal verschoben werden.
+function tmSpalten(tabelle){
+  const jahr={}, leiter={};
+  Object.keys(tabelle).map(Number).sort((a,b)=>a-b).forEach(z=>{
+    Object.entries(tabelle[z]).forEach(([sp,wert])=>{
+      const w=String(wert).trim();
+      if(/^\d\s*\+\s*\d$/.test(w) && !jahr[sp]) jahr[sp]=w.replace(/\s/g,'');
+      if(/^[A-ZÄÖÜ]{2,3}$/.test(w) && z<=8 && !leiter[sp] && !jahr[sp]) leiter[sp]=w;
+    });
+  });
+  return {jahr,leiter};
+}
+function tmTitel(jahrgang){
+  if(!jahrgang)return 'Lehrlingsförderung';
+  return 'Lehrlingsförderung '+jahrgang.replace('+','.+')+'. Lehrjahr';
+}
+
+function tmAusTabelle(tabelle){
+  const {jahr,leiter}=tmSpalten(tabelle);
+  const heute=dateKey(new Date());
+  const gefunden=[];
+  Object.keys(tabelle).map(Number).sort((a,b)=>a-b).forEach(z=>{
+    const zeile=tabelle[z];
+    const datum=tmZelleIso(zeile.A);
+    if(!datum)return;                                  // Winterferien, TOTAL, Hinweise
+    let jahrgang='', wer='';
+    Object.entries(zeile).forEach(([sp,wert])=>{
+      const w=String(wert).trim();
+      if(jahr[sp] && w) jahrgang=jahr[sp];
+      if(leiter[sp] && w) wer=leiter[sp];
+    });
+    const titel=tmTitel(jahrgang);
+    const schonDa=Object.values(state.termine||{}).some(t=>t.datum===datum && (t.titel||'')===titel);
+    gefunden.push({datum,titel,wer,vorbei:datum<heute,schonDa});
+  });
+  return gefunden;
+}
+
+function tmImport(){
+  showModal({title:'Termine aus Excel',content:`
+    <p style="color:var(--text2);font-size:13px;margin-bottom:12px">
+      Die Anwesenheitskontrolle der Lehrlinge auswählen. Aus Spalte <strong>Datum</strong>
+      und dem Kreuz beim Jahrgang entsteht je ein Termin.
+    </p>
+    <input type="file" id="tmDatei" accept=".xlsx" onchange="tmDateiGewaehlt(this)"
+      style="width:100%;padding:10px;background:var(--bg3);border:1px dashed var(--border2);border-radius:var(--radius);color:var(--text2);font-size:12px;cursor:pointer">
+    <div style="display:flex;gap:10px;margin-top:12px;align-items:flex-end">
+      <div style="flex:1">
+        <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Uhrzeit für alle</div>
+        <input class="modal-input" id="tmZeitAlle" style="margin-top:4px" value="17:00 Uhr">
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);padding-bottom:10px;cursor:pointer">
+        <input type="checkbox" id="tmMitLeiter" checked style="width:15px;height:15px;cursor:pointer"> Leiter anfügen
+      </label>
+    </div>
+    <div id="tmVorschau" style="margin-top:14px"></div>`,
+    actions:[{label:'Abbrechen',cancel:true},
+             {label:'Übernehmen',primary:true,action:tmImportSpeichern}]});
+}
+
+async function tmDateiGewaehlt(el){
+  const datei=el.files&&el.files[0]; if(!datei)return;
+  const ziel=document.getElementById('tmVorschau');
+  ziel.innerHTML='<div style="color:var(--text3);font-size:12px">Datei wird gelesen…</div>';
+  try{
+    tmGefunden=tmAusTabelle(await tmBlattLesen(await datei.arrayBuffer()));
+  }catch(e){
+    tmGefunden=[];
+    ziel.innerHTML='<div style="color:var(--red);font-size:12px">'+escHtml(e.message||'Die Datei konnte nicht gelesen werden.')+'</div>';
+    return;
+  }
+  tmVorschauZeigen();
+}
+
+function tmVorschauZeigen(){
+  const ziel=document.getElementById('tmVorschau'); if(!ziel)return;
+  if(!tmGefunden.length){
+    ziel.innerHTML='<div style="color:var(--text3);font-size:12px">In der Datei steht kein Termin mit Datum.</div>';
+    return;
+  }
+  const neu=tmGefunden.filter(t=>!t.vorbei&&!t.schonDa).length;
+  const wt=iso=>{const [y,m,d]=iso.split('-');return ['So','Mo','Di','Mi','Do','Fr','Sa'][new Date(+y,+m-1,+d).getDay()];};
+  const zeilen=tmGefunden.map((t,i)=>{
+    const aus=t.vorbei||t.schonDa;
+    const grund=t.vorbei?'vorbei':(t.schonDa?'schon erfasst':'');
+    return `<label style="display:flex;align-items:center;gap:9px;padding:5px 2px;font-size:12px;cursor:pointer;${aus?'opacity:.45':''}">
+      <input type="checkbox" id="tmSel${i}" ${aus?'':'checked'} style="width:15px;height:15px;cursor:pointer">
+      <span style="width:92px;color:var(--text3);font-variant-numeric:tabular-nums">${wt(t.datum)} ${fmtDate(t.datum)}</span>
+      <span style="flex:1">${escHtml(t.titel)}${t.wer?' <span style="color:var(--text3)">· '+escHtml(t.wer)+'</span>':''}</span>
+      ${grund?`<span style="color:var(--text3)">${grund}</span>`:''}
+    </label>`;
+  }).join('');
+  ziel.innerHTML=`<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px">
+      ${tmGefunden.length} gefunden · ${neu} neu</div>
+    <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);padding:6px 10px">${zeilen}</div>`;
+}
+
+function tmImportSpeichern(){
+  const zeit=(document.getElementById('tmZeitAlle')?.value||'').trim();
+  const mitLeiter=!!document.getElementById('tmMitLeiter')?.checked;
+  const jetzt=Date.now();
+  const neu={};
+  let anzahl=0;
+  tmGefunden.forEach((t,i)=>{
+    if(!document.getElementById('tmSel'+i)?.checked)return;
+    const zusatz=[zeit, (mitLeiter&&t.wer)?'Leitung '+t.wer:''].filter(Boolean).join(', ');
+    neu['tm'+jetzt+'_'+i]={titel:t.titel,datum:t.datum,zeit:zusatz,createdAt:jetzt+i};
+    anzahl++;
+  });
+  if(!anzahl){showToast('Kein Termin ausgewählt','error');return;}
+  db.ref('termine').update(neu);
+  closeModal();
+  showToast(anzahl+(anzahl===1?' Termin übernommen':' Termine übernommen'),'success');
+}
+
 // ===== TERMINE =====
 // Anlaesse mit festem Datum. Auf dem Wandbildschirm erscheinen sie eine
 // Woche vorher unten, stehen am Tag selbst rot da und verschwinden danach
@@ -2394,7 +2592,10 @@ function tmAbschnitt(){
       <span style="font-size:11px;font-weight:400;color:var(--text3)">– erscheinen eine Woche vorher unten am Wandbildschirm, am Tag selbst rot</span>
     </div>
     ${rows||'<div style="color:var(--text3);font-size:12px;padding:10px 0">Noch kein Termin erfasst.</div>'}
-    <button class="btn-add" onclick="tmNeu()">+ Termin hinzufuegen</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn-add" style="flex:1" onclick="tmNeu()">+ Termin hinzufuegen</button>
+      <button class="btn-sm" onclick="tmImport()">Aus Excel übernehmen</button>
+    </div>
   </div>`;
 }
 
