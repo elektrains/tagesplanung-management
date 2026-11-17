@@ -474,6 +474,7 @@ let state = {
   settings: {},
   kalender: {},
   kalenderStatusOnly: ['Timo','Christoph'],
+  settingsGeladen: false,
   myId: 'user_' + Math.random().toString(36).slice(2,8),
   myName: '',
   empFilter: null,
@@ -553,7 +554,10 @@ function gbJahreEntfernen(){
     const g=d[e]&&d[e].geburtstag;
     if(g&&String(g).length>5){d[e].geburtstag=String(g).slice(-5);z++;}
   });
-  if(z){saveSettings();showToast(z+(z===1?' Geburtsjahr entfernt':' Geburtsjahre entfernt'),'success');}
+  // Nur der eigene Zweig, nicht die ganzen Einstellungen: ein volles
+  // saveSettings() wuerde Felder leer schreiben, die noch nicht aus der
+  // Datenbank geladen sind.
+  if(z){fbWrite('settings/employeeDates',d,100);showToast(z+(z===1?' Geburtsjahr entfernt':' Geburtsjahre entfernt'),'success');}
 }
 
 function setupPresence(name) {
@@ -628,9 +632,12 @@ function setupListeners() {
       if (s.employeeDates) state.employeeDates = s.employeeDates;
       else state.employeeDates = {};
       state.weitereGeburtstage = s.weitereGeburtstage || [];
-      gbJahreEntfernen();
       state.kalender = s.kalender || {};
       if (s.kalenderStatusOnly) state.kalenderStatusOnly = s.kalenderStatusOnly;
+      // Ab hier steht im state, was in der Datenbank steht - erst jetzt
+      // darf etwas zurueckgeschrieben werden.
+      state.settingsGeladen = true;
+      gbJahreEntfernen();
     }
     render();
   });
@@ -1610,7 +1617,13 @@ function renderSettingsView(){
   </div>`;
 }
 
-function saveSettings(){fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[],employeeDates:state.employeeDates||{},weitereGeburtstage:state.weitereGeburtstage||[],kalender:state.kalender||{},kalenderStatusOnly:state.kalenderStatusOnly||[]},100);}
+// Ersetzt den ganzen settings-Zweig. Vor dem ersten Schnappschuss stehen im
+// state nur die Vorgaben - ein Schreiben jetzt wuerde die Datenbank damit
+// ueberschreiben. Darum der Riegel.
+function saveSettings(){
+  if(!state.settingsGeladen){showToast('Einstellungen noch nicht geladen – bitte nochmals','error');return;}
+  fbWrite('settings',{employees:state.employees,vehicles:state.vehicles,inactiveEmployees:state.inactiveEmployees||[],employeeDates:state.employeeDates||{},weitereGeburtstage:state.weitereGeburtstage||[],kalender:state.kalender||{},kalenderStatusOnly:state.kalenderStatusOnly||[]},100);
+}
 
 // ===== WEITERE GEBURTSTAGE =====
 // Leute, die gefeiert werden sollen, aber nicht in der Tagesplanung stehen:
