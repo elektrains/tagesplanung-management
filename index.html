@@ -1813,10 +1813,16 @@ function knKalenderSettingsHtml(){
     </div>`;
   }).join('');
   const zugeordnet=knAktiveMitarbeiter().filter(e=>kal[e]).length;
+  const verwaist=knKalenderVerwaist();
+  const verwaistHtml=verwaist.length?`<p style="font-size:11px;color:var(--text3);margin:8px 0 2px">
+    Nicht mehr aktiv, wird nicht gelesen: ${verwaist.map(escHtml).join(', ')}
+    <a href="#" style="color:var(--red)" onclick="event.preventDefault();knKalenderAufraeumen()">entfernen</a>
+  </p>`:'';
   return `<div class="settings-section">
     <div class="settings-section-title">Kalender-Zuordnung (${zugeordnet} von ${knAktiveMitarbeiter().length})</div>
     <p style="font-size:12px;color:var(--text2);margin-bottom:10px">Wer hier keine Kalender-ID hat, wird beim Abgleich übersprungen und wie bisher von Hand erfasst. „nur Status“ liest ausschliesslich Ferien/Schule/Frei — sinnvoll für die Projektleiter, deren Termine keine Baustellenzeilen sind.</p>
     ${rows}
+    ${verwaistHtml}
     <button class="btn-add" onclick="knKalenderVorbelegen()">Bekannte Kalender eintragen</button>
   </div>`;
 }
@@ -1835,9 +1841,10 @@ function knSetNurStatus(emp,an){
 }
 function knKalenderVorbelegen(){
   state.kalender=state.kalender||{};
+  const aktiv=knAktiveMitarbeiter();
   let n=0;
   Object.entries(KALENDER_BEKANNT).forEach(([emp,id])=>{
-    if(state.employees.includes(emp)&&!state.kalender[emp]){state.kalender[emp]=id;n++;}
+    if(aktiv.includes(emp)&&!state.kalender[emp]){state.kalender[emp]=id;n++;}
   });
   saveSettings();renderSettingsView();
   showToast(n?'✓ '+n+' Kalender eingetragen':'Alle bereits eingetragen','success');
@@ -2075,10 +2082,27 @@ function knVorschlaegeUebernehmen(){
 // --- Abweichungen über mehrere Tage finden ---
 let knPruefDaten=null,knPruefBereich=null,knAusPruefung=false;
 
+// Nur wer heute im Betrieb ist. Wer ausgetreten oder deaktiviert ist, steht
+// auch in der Zuordnungsliste nicht mehr - sein Kalender ist meist geloescht
+// und wuerde bei jedem Abgleich als Fehler gemeldet.
 function knKalenderIds(){
-  const kal={};
-  Object.keys(state.kalender||{}).forEach(e=>{if(state.kalender[e])kal[e]=state.kalender[e];});
+  const kal={}, zuordnung=state.kalender||{};
+  knAktiveMitarbeiter().forEach(e=>{if(zuordnung[e])kal[e]=zuordnung[e];});
   return kal;
+}
+
+// Eintraege von Leuten, die nicht mehr aktiv sind: werden nicht gelesen und
+// nicht angezeigt - darum in den Einstellungen benennen und entfernbar machen.
+function knKalenderVerwaist(){
+  const aktiv=new Set(knAktiveMitarbeiter());
+  return Object.keys(state.kalender||{}).filter(e=>!aktiv.has(e));
+}
+function knKalenderAufraeumen(){
+  const w=knKalenderVerwaist();
+  if(!w.length)return;
+  w.forEach(e=>delete state.kalender[e]);
+  saveSettings();renderSettingsView();
+  showToast('✓ '+w.length+(w.length===1?' Eintrag entfernt':' Eintraege entfernt'),'success');
 }
 
 function knPruefeZeitraum(){
